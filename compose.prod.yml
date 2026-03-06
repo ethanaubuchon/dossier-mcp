@@ -1,0 +1,26 @@
+services:
+  server:
+    build:
+      context: ./server
+      target: prod
+    ports:
+      - "3001:3001"
+    volumes:
+      - notes_data:/notes
+    environment:
+      - NODE_ENV=production
+      - NOTES_DIR=/notes
+    restart: unless-stopped
+
+  client:
+    build:
+      context: ./client
+      target: prod
+    ports:
+      - "5173:5173"
+    depends_on:
+      - server
+    restart: unless-stopped
+
+volumes:
+  notes_data:

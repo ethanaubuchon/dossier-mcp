@@ -1,0 +1,39 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    @apply h-full;
+  }
+  body {
+    @apply h-full bg-zinc-950 text-zinc-100 antialiased;
+  }
+  #root {
+    @apply h-full;
+  }
+}
+
+@layer components {
+  .prose-custom {
+    @apply prose prose-invert prose-zinc max-w-none
+      prose-headings:font-semibold
+      prose-a:text-violet-400 prose-a:no-underline hover:prose-a:underline
+      prose-code:bg-zinc-800 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:text-sm
+      prose-pre:bg-zinc-900 prose-pre:border prose-pre:border-zinc-700;
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  @apply bg-zinc-700 rounded-full;
+}
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-zinc-600;
+}

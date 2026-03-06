@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.env
+server/config.json
+*.log
+.DS_Store
+
+# Vite
+client/dist/
+
+# TypeScript
+*.tsbuildinfo
