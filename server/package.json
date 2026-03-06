@@ -4,12 +4,14 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
+    "mcp": "tsx src/mcp-entry.ts",
     "build": "tsc",
     "start": "node dist/index.js",
+    "start:mcp": "node dist/mcp-entry.js",
     "test": "jest --passWithNoTests"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.36.0",
+    "@modelcontextprotocol/sdk": "^1.12.0",
     "chokidar": "^4.0.0",
     "cors": "^2.8.5",
     "express": "^4.18.2",

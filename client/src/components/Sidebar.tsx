@@ -10,7 +10,7 @@ interface SidebarProps {
   onSettings: () => void;
   onTagSelect: (tag: string | null) => void;
   refreshTrigger: number;
-  onViewChat: () => void;
+  onViewSetup: () => void;
   currentView: string;
 }
 
@@ -22,7 +22,7 @@ export function Sidebar({
   onSettings,
   onTagSelect,
   refreshTrigger,
-  onViewChat,
+  onViewSetup,
   currentView,
 }: SidebarProps) {
   const [notes, setNotes] = useState<NoteListItem[]>([]);
@@ -65,7 +65,7 @@ export function Sidebar({
       <div className="p-4 border-b border-zinc-800">
         <div className="flex items-center justify-between mb-3">
           <button
-            onClick={onViewChat}
+            onClick={onViewSetup}
             className="flex items-center gap-2 text-violet-400 hover:text-violet-300 font-semibold text-sm"
           >
             <BookIcon />
@@ -97,17 +97,17 @@ export function Sidebar({
         />
       </div>
 
-      {/* Chat button */}
+      {/* Setup button */}
       <button
-        onClick={onViewChat}
+        onClick={onViewSetup}
         className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b border-zinc-800 transition-colors ${
-          currentView === 'chat'
+          currentView === 'setup'
             ? 'bg-violet-900/40 text-violet-300'
             : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
         }`}
       >
-        <ChatIcon />
-        Chat with AI
+        <PlugIcon />
+        Connect Claude
       </button>
 
       {/* Tag filter */}
@@ -210,10 +210,12 @@ function GearIcon() {
   );
 }
 
-function ChatIcon() {
+function PlugIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+      <path d="M18 6L6 18" /><path d="M7 17H4a1 1 0 0 1-1-1v-3" />
+      <path d="M21 8v-3a1 1 0 0 0-1-1h-3" />
+      <rect x="8" y="3" width="8" height="8" rx="1" ry="1" transform="rotate(45 12 7)" />
     </svg>
   );
 }

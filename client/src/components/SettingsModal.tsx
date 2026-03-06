@@ -6,15 +6,8 @@ interface SettingsModalProps {
   onClose: () => void;
 }
 
-const MODELS = [
-  'claude-opus-4-6',
-  'claude-sonnet-4-6',
-  'claude-haiku-4-5-20251001',
-];
-
 export function SettingsModal({ onClose }: SettingsModalProps) {
   const [config, setConfig] = useState<Partial<Config>>({});
-  const [apiKey, setApiKey] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -22,11 +15,7 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
 
   useEffect(() => {
     getSettings()
-      .then((c) => {
-        setConfig(c);
-        // Don't populate masked API key into input
-        setApiKey('');
-      })
+      .then(setConfig)
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false));
   }, []);
@@ -36,9 +25,8 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
     setError(null);
     setSaved(false);
     try {
-      const update: Partial<Config> = { ...config };
-      if (apiKey) update.apiKey = apiKey;
-      await saveSettings(update);
+      const updated = await saveSettings(config);
+      setConfig(updated);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {
@@ -72,33 +60,6 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
             )}
 
             <div>
-              <label className="block text-xs font-medium text-zinc-400 mb-1">Anthropic API Key</label>
-              <input
-                type="password"
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder={config.apiKey || 'sk-ant-…'}
-                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-violet-500 font-mono text-sm"
-              />
-              <p className="text-xs text-zinc-500 mt-1">
-                Leave blank to keep existing key. Stored server-side in config.json.
-              </p>
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium text-zinc-400 mb-1">Model</label>
-              <select
-                value={config.model || 'claude-opus-4-6'}
-                onChange={(e) => setConfig((c) => ({ ...c, model: e.target.value }))}
-                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-zinc-100 focus:outline-none focus:border-violet-500"
-              >
-                {MODELS.map((m) => (
-                  <option key={m} value={m}>{m}</option>
-                ))}
-              </select>
-            </div>
-
-            <div>
               <label className="block text-xs font-medium text-zinc-400 mb-1">Notes Vault Directory</label>
               <input
                 type="text"
@@ -107,6 +68,9 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
                 placeholder="/path/to/notes"
                 className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-violet-500 font-mono text-sm"
               />
+              <p className="text-xs text-zinc-500 mt-1">
+                Restart the MCP server after changing this path.
+              </p>
             </div>
 
             <div>

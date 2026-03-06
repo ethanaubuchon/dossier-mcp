@@ -24,19 +24,7 @@ export interface SearchResult {
   excerpt: string;
 }
 
-export interface ChatMessage {
-  role: 'user' | 'assistant';
-  content: string;
-}
-
-export interface ChatRequest {
-  messages: ChatMessage[];
-}
-
 export interface Config {
   notesDir: string;
-  apiKey: string;
-  provider: 'anthropic';
-  model: string;
   frontmatterTemplate: string;
 }

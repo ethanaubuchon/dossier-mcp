@@ -8,12 +8,7 @@ export const settingsRouter = Router();
 settingsRouter.get('/', async (_req: Request, res: Response) => {
   try {
     const config = await loadConfig();
-    // Don't expose full API key — mask it
-    const masked = {
-      ...config,
-      apiKey: config.apiKey ? '***' + config.apiKey.slice(-4) : '',
-    };
-    res.json(masked);
+    res.json(config);
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
@@ -23,11 +18,7 @@ settingsRouter.get('/', async (_req: Request, res: Response) => {
 settingsRouter.put('/', async (req: Request, res: Response) => {
   try {
     const updated = await saveConfig(req.body);
-    const masked = {
-      ...updated,
-      apiKey: updated.apiKey ? '***' + updated.apiKey.slice(-4) : '',
-    };
-    res.json(masked);
+    res.json(updated);
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }

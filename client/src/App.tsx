@@ -1,16 +1,16 @@
 import { useState, useCallback } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { NoteReader } from './components/NoteReader';
-import { ChatPanel } from './components/ChatPanel';
+import { MCPSetupPanel } from './components/MCPSetupPanel';
 import { SettingsModal } from './components/SettingsModal';
 import { NoteEditor } from './components/NoteEditor';
 import type { NoteListItem } from './types';
 
-type View = 'chat' | 'note' | 'edit';
+type View = 'setup' | 'note' | 'edit';
 
 export default function App() {
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
-  const [view, setView] = useState<View>('chat');
+  const [view, setView] = useState<View>('setup');
   const [showSettings, setShowSettings] = useState(false);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [activeTag, setActiveTag] = useState<string | null>(null);
@@ -38,13 +38,8 @@ export default function App() {
     refresh();
   };
 
-  const handleNoteCreatedByChat = () => {
-    refresh();
-  };
-
   return (
     <div className="flex h-full overflow-hidden">
-      {/* Sidebar */}
       <Sidebar
         activeSlug={selectedSlug}
         activeTag={activeTag}
@@ -53,19 +48,17 @@ export default function App() {
         onSettings={() => setShowSettings(true)}
         onTagSelect={setActiveTag}
         refreshTrigger={refreshTrigger}
-        onViewChat={() => setView('chat')}
+        onViewSetup={() => setView('setup')}
         currentView={view}
       />
 
-      {/* Main content */}
       <main className="flex-1 overflow-hidden">
-        {view === 'chat' && (
-          <ChatPanel
+        {view === 'setup' && (
+          <MCPSetupPanel
             onSelectNote={(slug) => {
               setSelectedSlug(slug);
               setView('note');
             }}
-            onNoteCreated={handleNoteCreatedByChat}
           />
         )}
         {view === 'note' && selectedSlug && (
@@ -82,7 +75,7 @@ export default function App() {
           <NoteEditor
             slug={selectedSlug}
             onSaved={handleSaved}
-            onCancel={() => setView(selectedSlug ? 'note' : 'chat')}
+            onCancel={() => setView(selectedSlug ? 'note' : 'setup')}
           />
         )}
       </main>

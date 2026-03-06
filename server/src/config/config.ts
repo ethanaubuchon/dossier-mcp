@@ -8,9 +8,6 @@ const CONFIG_PATH = path.join(__dirname, '../../config.json');
 
 const DEFAULT_CONFIG: Config = {
   notesDir: path.join(__dirname, '../../../notes'),
-  apiKey: '',
-  provider: 'anthropic',
-  model: 'claude-opus-4-6',
   frontmatterTemplate: '---\ntitle: "{{title}}"\ndate: {{date}}\ntags: []\nrelated: []\n---',
 };
 

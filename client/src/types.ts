@@ -24,15 +24,7 @@ export interface SearchResult {
   excerpt: string;
 }
 
-export interface ChatMessage {
-  role: 'user' | 'assistant';
-  content: string;
-}
-
 export interface Config {
   notesDir: string;
-  apiKey: string;
-  provider: string;
-  model: string;
   frontmatterTemplate: string;
 }

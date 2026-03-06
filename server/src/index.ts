@@ -4,7 +4,6 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { notesRouter } from './routes/notes.js';
 import { searchRouter } from './routes/search.js';
-import { chatRouter } from './routes/chat.js';
 import { settingsRouter } from './routes/settings.js';
 import { NoteStore } from './notes/NoteStore.js';
 import { SearchIndex } from './search/SearchIndex.js';
@@ -40,7 +39,6 @@ noteStore.on('change', (notes) => {
 // Routes
 app.use('/api/notes', notesRouter);
 app.use('/api/search', searchRouter);
-app.use('/api/chat', chatRouter);
 app.use('/api/settings', settingsRouter);
 
 // Health check
