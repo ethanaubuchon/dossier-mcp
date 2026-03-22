@@ -131,6 +131,8 @@ describe('NoteStore', () => {
     expect(slugs).toContain('projects/beta');
     const alpha = notes.find((n) => n.slug === 'alpha')!;
     expect(alpha.content).toContain('Alpha body text.');
+    const beta = notes.find((n) => n.slug === 'projects/beta')!;
+    expect(beta.content).toContain('Beta body text.');
   });
 
   test('listWithContent preserves date-descending sort', async () => {
