@@ -24,14 +24,14 @@ export class NoteStore extends EventEmitter {
   }
 
   private startWatcher(): void {
-    this.watcher = chokidar.watch(path.join(this.notesDir, '*.md'), {
+    this.watcher = chokidar.watch(path.join(this.notesDir, '**', '*.md'), {
       ignoreInitial: true,
       persistent: true,
+      ignored: (filePath: string) => filePath.includes('.sync-conflict'),
     });
 
-    const onChange = async () => {
-      const notes = await this.list();
-      this.emit('change', notes);
+    const onChange = () => {
+      this.emit('change');
     };
 
     this.watcher.on('add', onChange);
