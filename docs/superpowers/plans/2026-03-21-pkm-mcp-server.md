@@ -679,37 +679,63 @@ server.tool(
 );
 ```
 
-- [ ] **Step 4: Add slug validation to `get_note`, `update_note`, `delete_note`**
+- [ ] **Step 4: Add slug validation and update index rebuild in `get_note`, `update_note`, `delete_note`**
 
-In the `get_note` handler, add after `async ({ slug }) => {`:
+Replace the `get_note` handler body (the async function passed to `server.tool`) with:
 ```typescript
-if (!isValidSlug(slug)) return slugValidationError(slug);
+async ({ slug }) => {
+  if (!isValidSlug(slug)) return slugValidationError(slug);
+  const note = await noteStore.get(slug);
+  if (!note) {
+    return {
+      content: [{ type: 'text', text: `Note "${slug}" not found.` }],
+      isError: true,
+    };
+  }
+  return {
+    content: [{ type: 'text', text: note.raw }],
+  };
+}
 ```
 
-In the `update_note` handler, add after `async ({ slug, title, content, tags, related }) => {`:
+Replace the `update_note` handler body with:
 ```typescript
-if (!isValidSlug(slug)) return slugValidationError(slug);
+async ({ slug, title, content, tags, related }) => {
+  if (!isValidSlug(slug)) return slugValidationError(slug);
+  const existing = await noteStore.get(slug);
+  if (!existing) {
+    return {
+      content: [{ type: 'text', text: `Note "${slug}" not found.` }],
+      isError: true,
+    };
+  }
+  const note = await noteStore.upsert({ slug, title, content, tags, related });
+  const allNotes = await noteStore.listWithContent();
+  searchIndex.buildIndexWithContent(allNotes);
+  return {
+    content: [{ type: 'text', text: `Updated note "${note.frontmatter.title}" (slug: "${note.slug}").` }],
+  };
+}
 ```
 
-In the `delete_note` handler, add after `async ({ slug }) => {`:
+Replace the `delete_note` handler body with:
 ```typescript
-if (!isValidSlug(slug)) return slugValidationError(slug);
+async ({ slug }) => {
+  if (!isValidSlug(slug)) return slugValidationError(slug);
+  const deleted = await noteStore.delete(slug);
+  if (!deleted) {
+    return {
+      content: [{ type: 'text', text: `Note "${slug}" not found.` }],
+      isError: true,
+    };
+  }
+  const allNotes = await noteStore.listWithContent();
+  searchIndex.buildIndexWithContent(allNotes);
+  return {
+    content: [{ type: 'text', text: `Deleted note "${slug}".` }],
+  };
+}
 ```
-
-Also replace `buildIndex` with `buildIndexWithContent` in `update_note` and `delete_note`:
-
-In `update_note`, replace:
-```typescript
-const allNotes = await noteStore.list();
-searchIndex.buildIndex(allNotes);
-```
-With:
-```typescript
-const allNotes = await noteStore.listWithContent();
-searchIndex.buildIndexWithContent(allNotes);
-```
-
-Same replacement in `delete_note`.
 
 - [ ] **Step 5: Run full test suite**
 
