@@ -191,7 +191,7 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
     async () => {
       const notes = await noteStore.list();
       const lines = notes.map(
-        (n) => `- [${n.frontmatter.title}](note://${n.slug}) — ${n.frontmatter.date} [${n.frontmatter.tags.join(', ')}]`
+        (n) => `- [${n.frontmatter.title}](note://${encodeURIComponent(n.slug)}) — ${n.frontmatter.date} [${n.frontmatter.tags.join(', ')}]`
       );
       return {
         contents: [
@@ -211,7 +211,7 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
       const notes = await noteStore.list();
       return {
         resources: notes.map((n) => ({
-          uri: `note://${n.slug}`,
+          uri: `note://${encodeURIComponent(n.slug)}`,
           name: n.frontmatter.title,
           description: `Tagged: ${n.frontmatter.tags.join(', ') || 'none'} · ${n.frontmatter.date}`,
           mimeType: 'text/markdown',
@@ -225,7 +225,7 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
     noteTemplate,
     { description: 'A single note from the knowledge base, identified by its slug' },
     async (uri, { slug }) => {
-      const note = await noteStore.get(slug as string);
+      const note = await noteStore.get(decodeURIComponent(slug as string));
       if (!note) {
         throw new Error(`Note "${slug}" not found`);
       }
