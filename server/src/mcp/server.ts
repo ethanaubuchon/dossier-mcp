@@ -30,11 +30,8 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex):
     },
     async ({ path: prefix }) => {
       const notes = await noteStore.list();
-      const filtered = (() => {
-        if (!prefix) return notes;
-        const normalized = prefix.endsWith('/') ? prefix : prefix + '/';
-        return notes.filter((n) => n.slug.startsWith(normalized));
-      })();
+      const normalized = prefix && (prefix.endsWith('/') ? prefix : prefix + '/');
+      const filtered = normalized ? notes.filter((n) => n.slug.startsWith(normalized)) : notes;
       return {
         content: [{ type: 'text', text: JSON.stringify(filtered, null, 2) }],
       };
