@@ -86,4 +86,26 @@ describe('NoteStore', () => {
     expect(notes.map((n) => n.frontmatter.title)).toContain('Alpha');
     expect(notes.map((n) => n.frontmatter.title)).toContain('Beta');
   });
+
+  test('list returns notes in subdirectories', async () => {
+    await fs.mkdir(path.join(dir, 'projects', 'my-project'), { recursive: true });
+    await fs.writeFile(
+      path.join(dir, 'projects', 'my-project', 'index.md'),
+      '---\ntitle: Project Index\ndate: 2026-01-01\ntags: []\nrelated: []\n---\n\nContent.'
+    );
+    const notes = await store.list();
+    expect(notes).toHaveLength(1);
+    expect(notes[0].slug).toBe('projects/my-project/index');
+    expect(notes[0].frontmatter.title).toBe('Project Index');
+  });
+
+  test('list ignores .sync-conflict files', async () => {
+    // File must end in .md (to pass the extension check) AND contain .sync-conflict (to hit the filter)
+    await fs.writeFile(
+      path.join(dir, 'some-note.sync-conflict.md'),
+      '---\ntitle: Conflict\ndate: 2026-01-01\ntags: []\nrelated: []\n---\n\nConflict.'
+    );
+    const notes = await store.list();
+    expect(notes).toHaveLength(0);
+  });
 });

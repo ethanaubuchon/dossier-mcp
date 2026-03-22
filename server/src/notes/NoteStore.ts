@@ -55,19 +55,13 @@ export class NoteStore extends EventEmitter {
   }
 
   async list(): Promise<NoteListItem[]> {
-    let files: string[];
-    try {
-      files = await fs.readdir(this.notesDir);
-    } catch {
-      return [];
-    }
-
-    const mdFiles = files.filter((f) => f.endsWith('.md'));
+    const mdFiles = await this.walkMdFiles(this.notesDir);
     const notes = await Promise.all(
-      mdFiles.map(async (file) => {
-        const slug = file.replace(/\.md$/, '');
+      mdFiles.map(async (filePath) => {
+        const rel = path.relative(this.notesDir, filePath);
+        const slug = rel.replace(/\.md$/, '');
         try {
-          const raw = await fs.readFile(path.join(this.notesDir, file), 'utf-8');
+          const raw = await fs.readFile(filePath, 'utf-8');
           const parsed = matter(raw);
           return {
             slug,
@@ -82,6 +76,25 @@ export class NoteStore extends EventEmitter {
     return notes
       .filter((n): n is NoteListItem => n !== null)
       .sort((a, b) => b.frontmatter.date.localeCompare(a.frontmatter.date));
+  }
+
+  private async walkMdFiles(dir: string): Promise<string[]> {
+    const results: string[] = [];
+    let entries: import('fs').Dirent[];
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return results;
+    }
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        results.push(...(await this.walkMdFiles(fullPath)));
+      } else if (entry.isFile() && entry.name.endsWith('.md') && !fullPath.includes('.sync-conflict')) {
+        results.push(fullPath);
+      }
+    }
+    return results;
   }
 
   async get(slug: string): Promise<Note | null> {
