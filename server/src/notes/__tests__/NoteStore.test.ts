@@ -108,4 +108,16 @@ describe('NoteStore', () => {
     const notes = await store.list();
     expect(notes).toHaveLength(0);
   });
+
+  test('upsert creates nested directories for path-based slug', async () => {
+    await store.upsert({
+      slug: 'projects/my-project/notes',
+      title: 'Project Notes',
+      content: 'Some content here.',
+    });
+    const note = await store.get('projects/my-project/notes');
+    expect(note).not.toBeNull();
+    expect(note!.frontmatter.title).toBe('Project Notes');
+    expect(note!.slug).toBe('projects/my-project/notes');
+  });
 });

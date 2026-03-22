@@ -131,8 +131,10 @@ export class NoteStore extends EventEmitter {
       related: data.related ?? existing?.frontmatter.related ?? [],
     };
 
+    const notePath = this.notePath(slug);
+    await fs.mkdir(path.dirname(notePath), { recursive: true });
     const fileContent = matter.stringify(data.content, frontmatter as unknown as Record<string, unknown>);
-    await fs.writeFile(this.notePath(slug), fileContent);
+    await fs.writeFile(notePath, fileContent);
 
     return {
       slug,
