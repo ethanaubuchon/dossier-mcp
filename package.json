@@ -3,11 +3,11 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "concurrently --names server,client --prefix-colors magenta,cyan \"npm run dev --prefix server\" \"npm run dev --prefix client\"",
+    "dev": "npm run dev --prefix server",
     "mcp": "npm run mcp --prefix server",
-    "test": "npm test --prefix server && npm test --prefix client",
-    "build": "npm run build --prefix server && npm run build --prefix client",
-    "install:all": "npm install --prefix server && npm install --prefix client"
+    "test": "npm test --prefix server",
+    "build": "npm run build --prefix server",
+    "install:all": "npm install --prefix server"
   },
   "devDependencies": {
     "concurrently": "^9.0.0"
