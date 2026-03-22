@@ -43,13 +43,15 @@ async function main() {
 
   await noteStore.initialize();
 
-  const allNotes = await noteStore.list();
-  searchIndex.buildIndex(allNotes);
+  const allNotes = await noteStore.listWithContent();
+  searchIndex.buildIndexWithContent(allNotes);
 
-  noteStore.on('change', (notes) => {
-    searchIndex.buildIndex(notes);
+  noteStore.on('change', async () => {
+    const notes = await noteStore.listWithContent();
+    searchIndex.buildIndexWithContent(notes);
   });
 
+  // Note: notesDir will be added as a third arg to createMcpServer in Task 10
   const server = createMcpServer(noteStore, searchIndex);
   const transport = new StdioServerTransport();
 
