@@ -12,18 +12,3 @@ services:
       - NODE_ENV=development
       - NOTES_DIR=/notes
     restart: unless-stopped
-
-  client:
-    build:
-      context: ./client
-      target: dev
-    ports:
-      - "5173:5173"
-    volumes:
-      - ./client/src:/app/src
-      - ./client/index.html:/app/index.html
-    environment:
-      - VITE_API_URL=http://localhost:3001
-    depends_on:
-      - server
-    restart: unless-stopped
