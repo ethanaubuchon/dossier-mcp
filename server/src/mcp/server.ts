@@ -24,17 +24,19 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex):
 
   server.tool(
     'list_notes',
-    'List all notes in the knowledge base, sorted by date (newest first). Returns slug, title, date, and tags for each note.',
-    {},
-    async () => {
+    'List notes in the knowledge base, sorted by date (newest first). Optionally filter by slug prefix to scope results to a folder.',
+    {
+      path: z.string().optional().describe('Optional slug prefix to filter by (e.g. "projects/startup"). Trailing slash is normalized automatically.'),
+    },
+    async ({ path: prefix }) => {
       const notes = await noteStore.list();
+      const filtered = (() => {
+        if (!prefix) return notes;
+        const normalized = prefix.endsWith('/') ? prefix : prefix + '/';
+        return notes.filter((n) => n.slug.startsWith(normalized));
+      })();
       return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify(notes, null, 2),
-          },
-        ],
+        content: [{ type: 'text', text: JSON.stringify(filtered, null, 2) }],
       };
     }
   );

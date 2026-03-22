@@ -9,6 +9,7 @@ import os from 'os';
 import path from 'path';
 import { NoteStore } from '../../notes/NoteStore.js';
 import { SearchIndex } from '../../search/SearchIndex.js';
+import type { NoteListItem } from '../../types.js';
 
 async function makeTmpDir(): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), 'library-mcp-test-'));
@@ -175,5 +176,49 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
     const results = searchIndex.search('xyzzy123');
     expect(results).toHaveLength(1);
     expect(results[0].slug).toBe('alpha-note');
+  });
+
+  // list_notes path filter
+  describe('list_notes path filter', () => {
+    beforeEach(async () => {
+      await noteStore.upsert({ slug: 'projects/startup/index', title: 'Startup Index', content: 'a' });
+      await noteStore.upsert({ slug: 'projects/finances/index', title: 'Finances Index', content: 'b' });
+      await noteStore.upsert({ slug: 'reference/react-hooks', title: 'React Hooks', content: 'c' });
+    });
+
+    function filterByPath(notes: NoteListItem[], prefix: string | undefined): NoteListItem[] {
+      if (!prefix) return notes;
+      const normalized = prefix.endsWith('/') ? prefix : prefix + '/';
+      return notes.filter((n) => n.slug.startsWith(normalized));
+    }
+
+    test('no path returns all notes', async () => {
+      const notes = await noteStore.list();
+      expect(filterByPath(notes, undefined)).toHaveLength(3);
+    });
+
+    test('path filter returns only matching prefix', async () => {
+      const notes = await noteStore.list();
+      const filtered = filterByPath(notes, 'projects');
+      expect(filtered).toHaveLength(2);
+      expect(filtered.map((n) => n.slug)).toContain('projects/startup/index');
+      expect(filtered.map((n) => n.slug)).toContain('projects/finances/index');
+    });
+
+    test('trailing slash is normalized', async () => {
+      const notes = await noteStore.list();
+      expect(filterByPath(notes, 'projects/')).toHaveLength(2);
+      expect(filterByPath(notes, 'projects')).toHaveLength(2);
+    });
+
+    test('partial prefix does not match', async () => {
+      const notes = await noteStore.list();
+      expect(filterByPath(notes, 'project')).toHaveLength(0); // not a prefix of "projects/"
+    });
+
+    test('empty string returns all notes', async () => {
+      const notes = await noteStore.list();
+      expect(filterByPath(notes, '')).toHaveLength(3);
+    });
   });
 });
