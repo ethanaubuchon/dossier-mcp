@@ -130,4 +130,50 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
 
     expect(searchIndex.search('zzzyyyxxx')).toHaveLength(0);
   });
+
+  // Slug validation — tests the exact predicate logic used by isValidSlug in server.ts
+  test('slug validation rejects path traversal and absolute paths', () => {
+    const isValidSlug = (slug: string) => !slug.includes('..') && !slug.startsWith('/');
+    expect(isValidSlug('../etc/passwd')).toBe(false);
+    expect(isValidSlug('/absolute/path')).toBe(false);
+    expect(isValidSlug('projects/my-note')).toBe(true);
+    expect(isValidSlug('inbox/hello-world')).toBe(true);
+  });
+
+  // create_note: path parameter becomes the slug verbatim
+  test('create_note with explicit path slug places note at that path', async () => {
+    const slug = 'projects/startup/market-analysis';
+    await noteStore.upsert({ slug, title: 'Market Analysis', content: 'TAM analysis.' });
+    const note = await noteStore.get(slug);
+    expect(note).not.toBeNull();
+    expect(note!.slug).toBe(slug);
+    expect(note!.frontmatter.title).toBe('Market Analysis');
+  });
+
+  // create_note: no path defaults to inbox/<title-slug>
+  test('create_note without path uses inbox/ prefix', () => {
+    // Tests the slug derivation: 'inbox/' + NoteStore.makeSlug(title)
+    const defaultSlug = (title: string) => 'inbox/' + NoteStore.makeSlug(title);
+    expect(defaultSlug('My New Note')).toBe('inbox/my-new-note');
+    expect(defaultSlug('Startup Research')).toBe('inbox/startup-research');
+  });
+
+  // create_note: collision guard — handler calls noteStore.get() before upsert
+  test('create_note collision guard: noteStore.get detects existing note', async () => {
+    await noteStore.upsert({ slug: 'inbox/my-note', title: 'My Note', content: 'v1' });
+    const existing = await noteStore.get('inbox/my-note');
+    // Handler pattern: if (existing) return isError. Confirm the check works.
+    expect(existing).not.toBeNull();
+    expect(existing!.content.trim()).toContain('v1');
+  });
+
+  // search now indexes body content via buildIndexWithContent
+  test('search_notes finds matches in note body content', async () => {
+    await noteStore.upsert({ title: 'Alpha Note', content: 'The secret keyword is xyzzy123.' });
+    const allNotes = await noteStore.listWithContent();
+    searchIndex.buildIndexWithContent(allNotes);
+    const results = searchIndex.search('xyzzy123');
+    expect(results).toHaveLength(1);
+    expect(results[0].slug).toBe('alpha-note');
+  });
 });

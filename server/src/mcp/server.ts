@@ -3,6 +3,17 @@ import { z } from 'zod';
 import { NoteStore } from '../notes/NoteStore.js';
 import { SearchIndex } from '../search/SearchIndex.js';
 
+function isValidSlug(slug: string): boolean {
+  return !slug.includes('..') && !slug.startsWith('/');
+}
+
+function slugValidationError(slug: string) {
+  return {
+    isError: true as const,
+    content: [{ type: 'text' as const, text: `Invalid slug "${slug}": must be a relative path without ..` }],
+  };
+}
+
 export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex): McpServer {
   const server = new McpServer({
     name: 'library',
@@ -33,6 +44,7 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex):
     'Get the full content and metadata of a specific note by its slug.',
     { slug: z.string().describe('The note slug (e.g. "react-hooks-rules")') },
     async ({ slug }) => {
+      if (!isValidSlug(slug)) return slugValidationError(slug);
       const note = await noteStore.get(slug);
       if (!note) {
         return {
@@ -48,24 +60,31 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex):
 
   server.tool(
     'create_note',
-    'Create a new note in the knowledge base. Generates a slug from the title automatically. Use [[other-slug]] syntax in content to link to related notes.',
+    'Create a new note in the knowledge base. Provide a path to place it (e.g. "projects/startup/market-analysis") or omit to land it in inbox/. Use [[slug]] syntax to link to related notes.',
     {
       title: z.string().describe('The note title'),
       content: z.string().describe('Markdown content for the note body'),
+      path: z.string().optional().describe('Vault-relative path for the note slug (e.g. "projects/startup/my-note"). Defaults to inbox/<title-slug>.'),
       tags: z.array(z.string()).optional().describe('Tags to categorize the note'),
       related: z.array(z.string()).optional().describe('Slugs of related notes'),
     },
-    async ({ title, content, tags, related }) => {
-      const note = await noteStore.upsert({ title, content, tags, related });
-      const allNotes = await noteStore.list();
-      searchIndex.buildIndex(allNotes);
+    async ({ title, content, path: notePath, tags, related }) => {
+      const slug = notePath ?? ('inbox/' + NoteStore.makeSlug(title));
+      if (!isValidSlug(slug)) return slugValidationError(slug);
+
+      const existing = await noteStore.get(slug);
+      if (existing) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Note already exists at "${slug}" — use update_note to modify it.` }],
+        };
+      }
+
+      const note = await noteStore.upsert({ slug, title, content, tags, related });
+      const allNotes = await noteStore.listWithContent();
+      searchIndex.buildIndexWithContent(allNotes);
       return {
-        content: [
-          {
-            type: 'text',
-            text: `Created note "${note.frontmatter.title}" with slug "${note.slug}".`,
-          },
-        ],
+        content: [{ type: 'text', text: `Created note "${note.frontmatter.title}" with slug "${note.slug}".` }],
       };
     }
   );
@@ -81,6 +100,7 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex):
       related: z.array(z.string()).optional().describe('Updated related note slugs'),
     },
     async ({ slug, title, content, tags, related }) => {
+      if (!isValidSlug(slug)) return slugValidationError(slug);
       const existing = await noteStore.get(slug);
       if (!existing) {
         return {
@@ -89,15 +109,10 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex):
         };
       }
       const note = await noteStore.upsert({ slug, title, content, tags, related });
-      const allNotes = await noteStore.list();
-      searchIndex.buildIndex(allNotes);
+      const allNotes = await noteStore.listWithContent();
+      searchIndex.buildIndexWithContent(allNotes);
       return {
-        content: [
-          {
-            type: 'text',
-            text: `Updated note "${note.frontmatter.title}" (slug: "${note.slug}").`,
-          },
-        ],
+        content: [{ type: 'text', text: `Updated note "${note.frontmatter.title}" (slug: "${note.slug}").` }],
       };
     }
   );
@@ -107,6 +122,7 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex):
     'Delete a note from the knowledge base by its slug.',
     { slug: z.string().describe('The slug of the note to delete') },
     async ({ slug }) => {
+      if (!isValidSlug(slug)) return slugValidationError(slug);
       const deleted = await noteStore.delete(slug);
       if (!deleted) {
         return {
@@ -114,8 +130,8 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex):
           isError: true,
         };
       }
-      const allNotes = await noteStore.list();
-      searchIndex.buildIndex(allNotes);
+      const allNotes = await noteStore.listWithContent();
+      searchIndex.buildIndexWithContent(allNotes);
       return {
         content: [{ type: 'text', text: `Deleted note "${slug}".` }],
       };
