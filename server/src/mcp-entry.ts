@@ -47,8 +47,12 @@ async function main() {
   searchIndex.buildIndexWithContent(allNotes);
 
   noteStore.on('change', async () => {
-    const notes = await noteStore.listWithContent();
-    searchIndex.buildIndexWithContent(notes);
+    try {
+      const notes = await noteStore.listWithContent();
+      searchIndex.buildIndexWithContent(notes);
+    } catch (err) {
+      console.error('Failed to rebuild search index after vault change:', err);
+    }
   });
 
   const server = createMcpServer(noteStore, searchIndex, notesDir);

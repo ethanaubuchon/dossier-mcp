@@ -173,8 +173,9 @@ export class NoteStore extends EventEmitter {
     try {
       await fs.unlink(this.notePath(slug));
       return true;
-    } catch {
-      return false;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') return false;
+      throw e;
     }
   }
 

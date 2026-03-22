@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "mcp": "tsx src/mcp-entry.ts",
-    "build": "tsc",
+    "build": "tsc --project tsconfig.build.json",
     "start": "node dist/index.js",
     "start:mcp": "node dist/mcp-entry.js",
     "test": "jest --passWithNoTests"
