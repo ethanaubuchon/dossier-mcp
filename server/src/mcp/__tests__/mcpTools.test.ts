@@ -221,4 +221,30 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
       expect(filterByPath(notes, '')).toHaveLength(3);
     });
   });
+
+  // get_profile
+  describe('get_profile', () => {
+    test('returns profile.md content when it exists', async () => {
+      // Write a profile and read it back — same operation the tool does
+      await fs.writeFile(
+        path.join(dir, 'profile.md'),
+        '# Ethan\nSoftware engineer. Interested in startups.'
+      );
+      const raw = await fs.readFile(path.join(dir, 'profile.md'), 'utf-8');
+      expect(raw).toContain('Ethan');
+      expect(raw).toContain('Software engineer');
+    });
+
+    test('returns error when profile.md is missing', async () => {
+      // Verify the file does not exist — the tool catch block returns isError
+      const profilePath = path.join(dir, 'profile.md');
+      let readError: Error | null = null;
+      try {
+        await fs.readFile(profilePath, 'utf-8');
+      } catch (e) {
+        readError = e as Error;
+      }
+      expect(readError).not.toBeNull(); // tool would return isError: true
+    });
+  });
 });

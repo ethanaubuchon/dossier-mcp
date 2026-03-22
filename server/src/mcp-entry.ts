@@ -51,8 +51,7 @@ async function main() {
     searchIndex.buildIndexWithContent(notes);
   });
 
-  // Note: notesDir will be added as a third arg to createMcpServer in Task 10
-  const server = createMcpServer(noteStore, searchIndex);
+  const server = createMcpServer(noteStore, searchIndex, notesDir);
   const transport = new StdioServerTransport();
 
   await server.connect(transport);

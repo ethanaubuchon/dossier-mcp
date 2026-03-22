@@ -1,3 +1,5 @@
+import fs from 'fs/promises';
+import path from 'path';
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { NoteStore } from '../notes/NoteStore.js';
@@ -14,13 +16,30 @@ function slugValidationError(slug: string) {
   };
 }
 
-export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex): McpServer {
+export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, notesDir: string): McpServer {
   const server = new McpServer({
     name: 'library',
     version: '1.0.0',
   });
 
   // ── Tools ──────────────────────────────────────────────────────────────────
+
+  server.tool(
+    'get_profile',
+    'Fetch the personal profile (profile.md) from the vault root. Contains context about the user — fetch this at the start of personal conversations.',
+    {},
+    async () => {
+      try {
+        const raw = await fs.readFile(path.join(notesDir, 'profile.md'), 'utf-8');
+        return { content: [{ type: 'text', text: raw }] };
+      } catch {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: 'profile.md not found — create it at the vault root to use this tool.' }],
+        };
+      }
+    }
+  );
 
   server.tool(
     'list_notes',
