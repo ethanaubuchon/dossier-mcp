@@ -78,6 +78,31 @@ export class NoteStore extends EventEmitter {
       .sort((a, b) => b.frontmatter.date.localeCompare(a.frontmatter.date));
   }
 
+  async listWithContent(): Promise<Array<NoteListItem & { content: string }>> {
+    const mdFiles = await this.walkMdFiles(this.notesDir);
+    const notes = await Promise.all(
+      mdFiles.map(async (filePath) => {
+        const rel = path.relative(this.notesDir, filePath);
+        const slug = rel.replace(/\.md$/, '');
+        try {
+          const raw = await fs.readFile(filePath, 'utf-8');
+          const parsed = matter(raw);
+          return {
+            slug,
+            frontmatter: this.parseFrontmatter(parsed.data),
+            content: parsed.content,
+          };
+        } catch {
+          return null;
+        }
+      })
+    );
+
+    return notes
+      .filter((n): n is NoteListItem & { content: string } => n !== null)
+      .sort((a, b) => b.frontmatter.date.localeCompare(a.frontmatter.date));
+  }
+
   private async walkMdFiles(dir: string): Promise<string[]> {
     const results: string[] = [];
     let entries: import('fs').Dirent[];

@@ -120,4 +120,24 @@ describe('NoteStore', () => {
     expect(note!.frontmatter.title).toBe('Project Notes');
     expect(note!.slug).toBe('projects/my-project/notes');
   });
+
+  test('listWithContent returns notes with body content', async () => {
+    await store.upsert({ title: 'Alpha', content: 'Alpha body text.' });
+    await store.upsert({ slug: 'projects/beta', title: 'Beta', content: 'Beta body text.' });
+    const notes = await store.listWithContent();
+    expect(notes).toHaveLength(2);
+    const slugs = notes.map((n) => n.slug);
+    expect(slugs).toContain('alpha');
+    expect(slugs).toContain('projects/beta');
+    const alpha = notes.find((n) => n.slug === 'alpha')!;
+    expect(alpha.content).toContain('Alpha body text.');
+  });
+
+  test('listWithContent preserves date-descending sort', async () => {
+    await store.upsert({ title: 'One', content: 'one' });
+    await store.upsert({ title: 'Two', content: 'two' });
+    const byContent = await store.listWithContent();
+    const byList = await store.list();
+    expect(byContent.map((n) => n.slug)).toEqual(byList.map((n) => n.slug));
+  });
 });
