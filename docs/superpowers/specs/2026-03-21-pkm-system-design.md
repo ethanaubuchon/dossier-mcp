@@ -86,7 +86,7 @@ When `create_note` is called with a `path` parameter, that path **is** the slug 
 
 ### Slug Validation
 
-All tool handlers that accept a user-provided slug or path must validate it before use:
+All tool handlers that accept a user-provided slug or path must validate it **in the tool handler**, before calling `upsert()` or `noteStore.get()`:
 - Reject any slug containing `..` (path traversal)
 - Reject any slug starting with `/` (absolute path)
 - Return `{ isError: true, content: [{ type: 'text', text: 'Invalid slug: must be a relative path without ..' }] }` on failure
@@ -104,13 +104,13 @@ All tool handlers that accept a user-provided slug or path must validate it befo
 
 **`server/src/notes/NoteStore.ts`**
 - `list()`: replace flat `readdir` with a recursive walk of `NOTES_DIR`; filter out any path containing `.sync-conflict`; filter to `.md` files only; return type stays `NoteListItem[]`
-- Add `listWithContent(): Promise<Array<NoteListItem & { content: string }>>` — same recursive walk but reads file content for each note; used by search index building. Returns the intersection type that `buildIndexWithContent` already expects — do not change `buildIndexWithContent`'s signature.
+- Add `listWithContent(): Promise<Array<NoteListItem & { content: string }>>` — same recursive walk, same `.sync-conflict` filter, same date-descending sort as `list()`, but also reads file content for each note. Returns the intersection type that `buildIndexWithContent` already expects — do not change `buildIndexWithContent`'s signature.
 - `upsert()`: no change to method signature. Call `fs.mkdir(parentDir, { recursive: true })` before writing to create intermediate directories. When `slug` is provided, use it directly as the file path; when omitted, auto-generate from title as before.
 - File watcher glob: change from `*.md` (root only) to `**/*.md` (recursive); apply the same `.sync-conflict` filter
 
 **`server/src/search/SearchIndex.ts`**
 - `buildIndex()` is kept (used in existing tests); no signature change
-- `buildIndexWithContent` is used for all runtime paths (startup and after mutations); its signature is unchanged; it should index `title + tags + related + content` (related slugs are intentionally kept searchable)
+- `buildIndexWithContent` is used for all runtime paths (startup and after mutations); its signature is unchanged; update its implementation to also include `related` slugs in indexed text (currently it indexes only `title + tags + content` — add `...note.frontmatter.related` to match `buildIndex` behavior)
 
 **`server/src/mcp/server.ts`**
 - `create_note` tool handler: call `noteStore.get(slug)` first; if a note exists, return `{ isError: true, content: [{ type: 'text', text: 'Note already exists at <slug> — use update_note to modify it' }] }`; if not, call `noteStore.upsert()`. The "already exists" guard lives in the tool handler, not in `upsert()`, so existing `NoteStore` upsert tests remain valid.
@@ -125,7 +125,7 @@ All tool handlers that accept a user-provided slug or path must validate it befo
 - `change` event handler: ignore the emitted payload; call `noteStore.listWithContent()` + `searchIndex.buildIndexWithContent()` directly inside the handler. (The emitted payload remains `NoteListItem[]` — leave `NoteStore`'s emit unchanged; the handler simply does not use it.)
 
 ### Add
-- `get_profile` MCP tool — reads `$NOTES_DIR/profile.md`; if missing, returns `{ isError: true, content: [{ type: 'text', text: 'profile.md not found — create it at the vault root to use this tool' }] }` (same error pattern as `get_note`); tests included
+- `get_profile` MCP tool — reads `$NOTES_DIR/profile.md` and returns its raw markdown content (same format as `get_note`); profile.md does not require frontmatter; if missing, returns `{ isError: true, content: [{ type: 'text', text: 'profile.md not found — create it at the vault root to use this tool' }] }`; tests must cover: profile exists (returns content), profile missing (returns error)
 - `path` parameter on `create_note` — mapped to `slug` in `upsert()` call inside the tool handler
 - Update existing `mcpTools` tests to use `noteStore.listWithContent()` + `searchIndex.buildIndexWithContent()` where index rebuilds are tested; `SearchIndex.test.ts` can continue using `buildIndex` directly since that method is kept
 
@@ -148,7 +148,7 @@ All tool handlers that accept a user-provided slug or path must validate it befo
 - Notes use YAML frontmatter: `title`, `date`, `tags`, `related`
 - Cross-note links use `[[slug]]` syntax in content body; `related` frontmatter lists slugs of explicitly linked notes
 - `profile.md` lives at vault root and is never project-specific
-- Syncthing conflict files (any path containing `.sync-conflict`) are ignored by NoteStore and the search index
+- Syncthing conflict files are ignored by NoteStore and the search index; filter by substring match: skip any file whose full path includes `.sync-conflict` (e.g. `note.md.sync-conflict-20260321-120000-ABCDEF`)
 
 ## Workflow
 
