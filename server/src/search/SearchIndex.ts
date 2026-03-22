@@ -31,6 +31,7 @@ export class SearchIndex {
       const text = [
         note.frontmatter.title,
         ...note.frontmatter.tags,
+        ...note.frontmatter.related,
         note.content,
       ].join(' ');
       return {

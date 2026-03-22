@@ -66,4 +66,22 @@ describe('SearchIndex', () => {
     expect(results[0].excerpt).toBeDefined();
     expect(typeof results[0].excerpt).toBe('string');
   });
+
+  test('buildIndexWithContent indexes related slugs', () => {
+    index.buildIndexWithContent([
+      {
+        slug: 'projects/finances/overview',
+        frontmatter: {
+          title: 'Finances Overview',
+          date: '2026-01-01',
+          tags: [],
+          related: ['projects/startup-research/index'],
+        },
+        content: 'My finances overview.',
+      },
+    ]);
+    const results = index.search('startup-research');
+    expect(results).toHaveLength(1);
+    expect(results[0].slug).toBe('projects/finances/overview');
+  });
 });
