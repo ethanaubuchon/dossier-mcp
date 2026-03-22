@@ -79,8 +79,8 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
 
   test('create_note updates search index', async () => {
     await noteStore.upsert({ title: 'TypeScript Generics', content: 'Generics allow reusable types.', tags: ['typescript'] });
-    const notes = await noteStore.list();
-    searchIndex.buildIndex(notes);
+    const notes = await noteStore.listWithContent();
+    searchIndex.buildIndexWithContent(notes);
 
     const results = searchIndex.search('generics');
     expect(results).toHaveLength(1);
@@ -116,8 +116,8 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
   test('search_notes finds notes by keyword', async () => {
     await noteStore.upsert({ title: 'CSS Flexbox', content: 'Flexbox layout guide.', tags: ['css'] });
     await noteStore.upsert({ title: 'Grid Layout', content: 'CSS grid explained.', tags: ['css'] });
-    const notes = await noteStore.list();
-    searchIndex.buildIndex(notes);
+    const notes = await noteStore.listWithContent();
+    searchIndex.buildIndexWithContent(notes);
 
     const results = searchIndex.search('flexbox');
     expect(results).toHaveLength(1);
@@ -126,8 +126,8 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
 
   test('search_notes returns empty for no matches', async () => {
     await noteStore.upsert({ title: 'Some Note', content: 'Some content.' });
-    const notes = await noteStore.list();
-    searchIndex.buildIndex(notes);
+    const notes = await noteStore.listWithContent();
+    searchIndex.buildIndexWithContent(notes);
 
     expect(searchIndex.search('zzzyyyxxx')).toHaveLength(0);
   });
