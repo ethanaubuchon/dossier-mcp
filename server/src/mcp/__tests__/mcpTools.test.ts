@@ -8,6 +8,7 @@
 import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
+import { z } from 'zod';
 import { NoteStore } from '../../notes/NoteStore.js';
 import { SearchIndex } from '../../search/SearchIndex.js';
 import type { NoteListItem } from '../../types.js';
@@ -180,36 +181,28 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
     expect(results[0].slug).toBe('alpha-note');
   });
 
-  describe('tag/related string coercion — integration', () => {
-    test('create_note stores tags passed as a comma-separated string', async () => {
-      const coerced = coerceStringArray('react, hooks, typescript');
-      const note = await noteStore.upsert({
-        title: 'Coerce Test',
-        content: 'body',
-        tags: coerced,
-      });
-      expect(note.frontmatter.tags).toEqual(['react', 'hooks', 'typescript']);
+  describe('tag/related string coercion — Zod schema wiring', () => {
+    // Construct the same schema used in create_note and update_note
+    const tagsSchema = z.preprocess(coerceStringArray, z.array(z.string()).optional());
+
+    test('schema coerces comma-separated string to array', () => {
+      expect(tagsSchema.parse('react, hooks, typescript')).toEqual(['react', 'hooks', 'typescript']);
     });
 
-    test('create_note stores tags passed as a JSON-encoded string array', async () => {
-      const coerced = coerceStringArray('["react","hooks"]');
-      const note = await noteStore.upsert({
-        title: 'Coerce JSON Test',
-        content: 'body',
-        tags: coerced,
-      });
-      expect(note.frontmatter.tags).toEqual(['react', 'hooks']);
+    test('schema coerces JSON-encoded string array to array', () => {
+      expect(tagsSchema.parse('["react","hooks"]')).toEqual(['react', 'hooks']);
     });
 
-    test('create_note stores related passed as a comma-separated string', async () => {
-      await noteStore.upsert({ slug: 'other-note', title: 'Other', content: 'x' });
-      const coerced = coerceStringArray('other-note');
-      const note = await noteStore.upsert({
-        title: 'With Related',
-        content: 'body',
-        related: coerced,
-      });
-      expect(note.frontmatter.related).toEqual(['other-note']);
+    test('schema passes through an actual array unchanged', () => {
+      expect(tagsSchema.parse(['react', 'hooks'])).toEqual(['react', 'hooks']);
+    });
+
+    test('schema accepts undefined', () => {
+      expect(tagsSchema.parse(undefined)).toBeUndefined();
+    });
+
+    test('schema coerces single bare string to single-element array', () => {
+      expect(tagsSchema.parse('typescript')).toEqual(['typescript']);
     });
   });
 
