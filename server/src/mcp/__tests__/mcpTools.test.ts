@@ -1,7 +1,8 @@
 /**
- * Unit tests for MCP tool handlers.
- * We test the NoteStore + SearchIndex integration directly (same logic the MCP tools use)
+ * Unit tests for MCP tool logic and utilities.
+ * Integration tests use NoteStore + SearchIndex directly (same logic the MCP tools use)
  * rather than spinning up a full MCP server, which would require stdio transport plumbing.
+ * Pure utility tests (e.g. coerceStringArray) are also included here.
  */
 
 import fs from 'fs/promises';
@@ -177,6 +178,39 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
     const results = searchIndex.search('xyzzy123');
     expect(results).toHaveLength(1);
     expect(results[0].slug).toBe('alpha-note');
+  });
+
+  describe('tag/related string coercion — integration', () => {
+    test('create_note stores tags passed as a comma-separated string', async () => {
+      const coerced = coerceStringArray('react, hooks, typescript');
+      const note = await noteStore.upsert({
+        title: 'Coerce Test',
+        content: 'body',
+        tags: coerced,
+      });
+      expect(note.frontmatter.tags).toEqual(['react', 'hooks', 'typescript']);
+    });
+
+    test('create_note stores tags passed as a JSON-encoded string array', async () => {
+      const coerced = coerceStringArray('["react","hooks"]');
+      const note = await noteStore.upsert({
+        title: 'Coerce JSON Test',
+        content: 'body',
+        tags: coerced,
+      });
+      expect(note.frontmatter.tags).toEqual(['react', 'hooks']);
+    });
+
+    test('create_note stores related passed as a comma-separated string', async () => {
+      await noteStore.upsert({ slug: 'other-note', title: 'Other', content: 'x' });
+      const coerced = coerceStringArray('other-note');
+      const note = await noteStore.upsert({
+        title: 'With Related',
+        content: 'body',
+        related: coerced,
+      });
+      expect(note.frontmatter.related).toEqual(['other-note']);
+    });
   });
 
   // list_notes path filter

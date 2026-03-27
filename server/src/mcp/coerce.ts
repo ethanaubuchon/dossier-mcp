@@ -9,7 +9,7 @@
  */
 export function coerceStringArray(val: unknown): string[] | undefined {
   if (val === undefined || val === null) return undefined;
-  if (Array.isArray(val)) return val as string[];
+  if (Array.isArray(val)) return val.map(String);
   if (typeof val === 'string') {
     const trimmed = val.trim();
     if (trimmed === '') return undefined;
