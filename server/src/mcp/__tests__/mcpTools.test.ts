@@ -10,6 +10,7 @@ import path from 'path';
 import { NoteStore } from '../../notes/NoteStore.js';
 import { SearchIndex } from '../../search/SearchIndex.js';
 import type { NoteListItem } from '../../types.js';
+import { coerceStringArray } from '../coerce.js';
 
 async function makeTmpDir(): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), 'library-mcp-test-'));
@@ -245,6 +246,32 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
         readError = e as Error;
       }
       expect(readError).not.toBeNull(); // tool would return isError: true
+    });
+  });
+
+  describe('coerceStringArray', () => {
+    test('passes through an existing array unchanged', () => {
+      expect(coerceStringArray(['tag1', 'tag2'])).toEqual(['tag1', 'tag2']);
+    });
+
+    test('parses a JSON-encoded string array', () => {
+      expect(coerceStringArray('["tag1", "tag2"]')).toEqual(['tag1', 'tag2']);
+    });
+
+    test('splits a comma-separated string into an array', () => {
+      expect(coerceStringArray('tag1, tag2, tag3')).toEqual(['tag1', 'tag2', 'tag3']);
+    });
+
+    test('wraps a single value with no commas in an array', () => {
+      expect(coerceStringArray('tag1')).toEqual(['tag1']);
+    });
+
+    test('returns undefined for undefined input', () => {
+      expect(coerceStringArray(undefined)).toBeUndefined();
+    });
+
+    test('trims whitespace from comma-separated values', () => {
+      expect(coerceStringArray('  tag1 ,  tag2  ')).toEqual(['tag1', 'tag2']);
     });
   });
 });
