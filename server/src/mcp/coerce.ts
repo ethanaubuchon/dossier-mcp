@@ -6,6 +6,7 @@
  * - A comma-separated string: 'tag1, tag2'
  * - A single bare string: 'tag1'
  * - An already-correct array: ['tag1', 'tag2']
+ * - A JSON-encoded non-array (e.g. '42', '{"a":1}'): treated as a plain string, comma-split
  */
 export function coerceStringArray(val: unknown): string[] | undefined {
   if (val === undefined || val === null) return undefined;
