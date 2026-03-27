@@ -270,6 +270,10 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
       expect(coerceStringArray(undefined)).toBeUndefined();
     });
 
+    test('returns undefined for null input', () => {
+      expect(coerceStringArray(null)).toBeUndefined();
+    });
+
     test('trims whitespace from comma-separated values', () => {
       expect(coerceStringArray('  tag1 ,  tag2  ')).toEqual(['tag1', 'tag2']);
     });
