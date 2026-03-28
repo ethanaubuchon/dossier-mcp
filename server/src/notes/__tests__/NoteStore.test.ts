@@ -142,4 +142,99 @@ describe('NoteStore', () => {
     const byList = await store.list();
     expect(byContent.map((n) => n.slug)).toEqual(byList.map((n) => n.slug));
   });
+
+  describe('watcher', () => {
+    const NOTE_FRONTMATTER = '---\ntitle: Note\ndate: 2026-01-01\ntags: []\nrelated: []\n---\n\nContent.';
+
+    function waitForChange(timeout = 3000): Promise<void> {
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(
+          () => reject(new Error('Timed out waiting for change event')),
+          timeout
+        );
+        store.once('change', () => {
+          clearTimeout(timer);
+          resolve();
+        });
+      });
+    }
+
+    test('emits change when a file is written directly', async () => {
+      const changed = waitForChange();
+      await fs.writeFile(path.join(dir, 'direct-write.md'), NOTE_FRONTMATTER);
+      await changed;
+    }, 4000);
+
+    test('emits change when a file is dropped via atomic rename (Syncthing pattern)', async () => {
+      const changed = waitForChange();
+      // Syncthing writes to a temp file then renames to the final .md path
+      const tmpPath = path.join(dir, 'syncthing-drop.md.tmp');
+      const finalPath = path.join(dir, 'syncthing-drop.md');
+      await fs.writeFile(tmpPath, NOTE_FRONTMATTER);
+      await fs.rename(tmpPath, finalPath);
+      await changed;
+    }, 4000);
+
+    test('debounces rapid file writes into a single change event', async () => {
+      let changeCount = 0;
+      store.on('change', () => { changeCount++; });
+
+      // Write several files at once to simulate a batch Syncthing sync
+      await Promise.all([
+        fs.writeFile(path.join(dir, 'batch-a.md'), NOTE_FRONTMATTER),
+        fs.writeFile(path.join(dir, 'batch-b.md'), NOTE_FRONTMATTER),
+        fs.writeFile(path.join(dir, 'batch-c.md'), NOTE_FRONTMATTER),
+      ]);
+
+      // Allow time for awaitWriteFinish stability polling (~500 ms) and the
+      // debounce timer (300 ms), with margin for CI variance
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+
+      expect(changeCount).toBe(1);
+    }, 5000);
+
+    test('emits change when a file in a subdirectory is written', async () => {
+      const changed = waitForChange();
+      await fs.mkdir(path.join(dir, 'meta', 'hardware'), { recursive: true });
+      await fs.writeFile(path.join(dir, 'meta', 'hardware', 'gpu.md'), NOTE_FRONTMATTER);
+      await changed;
+    }, 4000);
+
+    test('does not emit change for .sync-conflict files', async () => {
+      let changeCount = 0;
+      store.on('change', () => { changeCount++; });
+
+      await fs.writeFile(
+        path.join(dir, 'some-note.sync-conflict.md'),
+        NOTE_FRONTMATTER
+      );
+
+      // Wait long enough that a change event would have arrived if emitted
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      expect(changeCount).toBe(0);
+    }, 5000);
+
+    test('does not emit change for non-.md files', async () => {
+      let changeCount = 0;
+      store.on('change', () => { changeCount++; });
+
+      await fs.writeFile(path.join(dir, 'data.json'), '{}');
+      await fs.writeFile(path.join(dir, 'README.txt'), 'hello');
+
+      // Wait long enough that a change event would have arrived if emitted
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      expect(changeCount).toBe(0);
+    }, 5000);
+
+    test('emits change when a file is deleted', async () => {
+      // Create the file before the watcher test so the store is already watching
+      await fs.writeFile(path.join(dir, 'to-delete.md'), NOTE_FRONTMATTER);
+      // Wait for the add event to settle before listening for the delete
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+
+      const changed = waitForChange();
+      await fs.unlink(path.join(dir, 'to-delete.md'));
+      await changed;
+    }, 6000);
+  });
 });

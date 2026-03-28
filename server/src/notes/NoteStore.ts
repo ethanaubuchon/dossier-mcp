@@ -12,6 +12,7 @@ const slugify = (slugifyLib as unknown as (text: string, options?: object) => st
 export class NoteStore extends EventEmitter {
   private notesDir: string;
   private watcher: FSWatcher | null = null;
+  private debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(notesDir: string) {
     super();
@@ -20,26 +21,63 @@ export class NoteStore extends EventEmitter {
 
   async initialize(): Promise<void> {
     await fs.mkdir(this.notesDir, { recursive: true });
-    this.startWatcher();
+    await this.startWatcher();
   }
 
-  private startWatcher(): void {
-    this.watcher = chokidar.watch(path.join(this.notesDir, '**', '*.md'), {
-      ignoreInitial: true,
-      persistent: true,
-      ignored: (filePath: string) => filePath.includes('.sync-conflict'),
+  private startWatcher(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      // Chokidar v4 dropped glob support — watch the directory directly and
+      // filter to .md files via `ignored`. The previous **/*.md glob was treated
+      // as a literal path that doesn't exist, so no events were ever emitted.
+      this.watcher = chokidar.watch(this.notesDir, {
+        ignoreInitial: true,
+        persistent: true,
+        ignored: (filePath: string, stats?: import('fs').Stats) =>
+          // Exclude Syncthing conflict copies and any non-.md files.
+          // When stats are available, directories are always allowed through so
+          // chokidar descends into subdirectories. Without stats (initial scan
+          // pass), we also allow anything without an extension to pass through.
+          filePath.includes('.sync-conflict') ||
+          (stats?.isFile() === true && !filePath.endsWith('.md')),
+        // awaitWriteFinish polls stat() after an add/change event and delays
+        // emitting until the file size has been stable for stabilityThreshold ms.
+        // This prevents a premature event when the OS delivers the notification
+        // before the file content is fully flushed. Chokidar's built-in `atomic`
+        // option (enabled by default) handles Syncthing's write-to-temp-then-rename
+        // pattern; the `ignored` predicate above prevents events for .tmp files.
+        awaitWriteFinish: { stabilityThreshold: 500, pollInterval: 100 },
+      });
+
+      const onChange = () => {
+        if (this.debounceTimer) clearTimeout(this.debounceTimer);
+        this.debounceTimer = setTimeout(() => {
+          this.debounceTimer = null;
+          this.emit('change');
+        }, 300).unref();
+      };
+
+      this.watcher.on('add', onChange);
+      this.watcher.on('change', onChange);
+      this.watcher.on('unlink', onChange);
+
+      const onStartupError = (err: unknown) => reject(err);
+      this.watcher.once('error', onStartupError);
+      this.watcher.once('ready', () => {
+        this.watcher!.off('error', onStartupError);
+        this.watcher!.on('error', (err) => {
+          console.error('[library] Chokidar watcher error:', err);
+          this.emit('watcherError', err);
+        });
+        resolve();
+      });
     });
-
-    const onChange = () => {
-      this.emit('change');
-    };
-
-    this.watcher.on('add', onChange);
-    this.watcher.on('change', onChange);
-    this.watcher.on('unlink', onChange);
   }
 
   async close(): Promise<void> {
+    if (this.debounceTimer) {
+      clearTimeout(this.debounceTimer);
+      this.debounceTimer = null;
+    }
     if (this.watcher) {
       await this.watcher.close();
       this.watcher = null;
