@@ -1,6 +1,8 @@
 # library
 
-Personal knowledge management MCP server. Reads and writes notes in an Obsidian vault, exposing them to Claude Code via the Model Context Protocol.
+Personal knowledge management MCP server. Reads and writes notes in an Obsidian vault via the [Model Context Protocol](https://modelcontextprotocol.io).
+
+Built and tested with [Claude Code](https://claude.ai/code). Any MCP-compatible coding agent should work — the server uses standard stdio transport. Registration commands below are Claude Code-specific; other clients will have their own configuration method.
 
 ## Setup
 
@@ -11,7 +13,9 @@ npm install
 
 ## MCP Configuration
 
-The server runs as a stdio process spawned by Claude Code. Register it with:
+The following commands are for Claude Code. Other MCP clients will have their own way to register a stdio server — point them at the same binary with `NOTES_DIR` set.
+
+Register with Claude Code:
 
 ```bash
 claude mcp add -s user library -e NOTES_DIR=/path/to/your/vault -- <command>
