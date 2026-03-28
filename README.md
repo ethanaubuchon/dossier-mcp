@@ -4,6 +4,12 @@ Personal knowledge management MCP server. Reads and writes notes in an Obsidian 
 
 Built and tested with [Claude Code](https://claude.ai/code). Any MCP-compatible coding agent should work — the server uses standard stdio transport. Registration commands below are Claude Code-specific; other clients will have their own configuration method.
 
+## Philosophy
+
+This tool is designed for **agent-as-author** use: Claude writes and maintains notes in your vault, building up a persistent cross-session memory that you can optionally inspect in Obsidian or any Markdown viewer.
+
+This is the inverse of tools like Obsidian MCP, where the agent reads notes *you* wrote. Here, the agent is the primary author. You direct conversations, the agent captures context, decisions, and knowledge — and picks it all back up next session without you repeating yourself. The result is a lightweight RAG you didn't have to build: structured, searchable, human-readable, and maintained by the agent as a side effect of working with you.
+
 ## Setup
 
 ```bash
