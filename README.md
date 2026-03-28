@@ -63,36 +63,39 @@ Then re-add with the command above.
 
 ## profile.md
 
-`get_profile` reads `$NOTES_DIR/profile.md` — a free-form markdown file at the vault root that gives the AI persistent context about you. Think of it as a briefing document the agent reads at the start of a session to understand who you are, what you're working on, and how you prefer to collaborate.
+`get_profile` reads `$NOTES_DIR/profile.md` — a free-form markdown file at the vault root that serves as the bootstrap document for the AI. When the MCP server is activated, reading this file first orients the agent to the vault: how it's organized, what it contains, and how to navigate it effectively.
+
+What you put here is entirely up to you and your use case. Some possibilities:
+
+- **Personal context** — who you are, current projects, working preferences
+- **Vault structure** — how notes are organized, what naming conventions mean, which folders exist
+- **Usage instructions** — how the AI should interact with your notes, what to prioritize, what to avoid
+- **Domain context** — background knowledge the AI needs to be useful in your specific domain
 
 The file uses standard frontmatter followed by markdown:
 
 ```markdown
 ---
-title: Your Name — Profile
+title: Vault Profile
 date: '2026-01-01'
 tags:
   - profile
-  - personal
 ---
-# Your Name
+# My Vault
 
-Brief bio, location, current role.
+Brief description of what this vault contains and who it's for.
 
-## Work
+## Structure
 
-What you do, current projects, priorities.
+How notes are organized — folders, naming conventions, key entry points.
 
-## Preferences
+## How to Use This Vault
 
-How you like to work, communication style, tools.
-
-## Current Focus
-
-Active projects or goals the AI should be aware of.
+Instructions for the AI: what to read first, how to search effectively,
+any conventions to follow when creating or updating notes.
 ```
 
-The content is entirely up to you — write what would be useful for an AI collaborator to know. If `profile.md` doesn't exist, `get_profile` returns a clear error message rather than failing silently.
+If `profile.md` doesn't exist, `get_profile` returns a clear error message rather than failing silently.
 
 ## Tools exposed to Claude
 
