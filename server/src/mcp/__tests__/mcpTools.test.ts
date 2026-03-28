@@ -1,15 +1,18 @@
 /**
- * Unit tests for MCP tool handlers.
- * We test the NoteStore + SearchIndex integration directly (same logic the MCP tools use)
+ * Unit tests for MCP tool logic and utilities.
+ * Integration tests use NoteStore + SearchIndex directly (same logic the MCP tools use)
  * rather than spinning up a full MCP server, which would require stdio transport plumbing.
+ * Pure utility tests (e.g. coerceStringArray) are also included here.
  */
 
 import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
+import { z } from 'zod';
 import { NoteStore } from '../../notes/NoteStore.js';
 import { SearchIndex } from '../../search/SearchIndex.js';
 import type { NoteListItem } from '../../types.js';
+import { coerceStringArray } from '../coerce.js';
 
 async function makeTmpDir(): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), 'library-mcp-test-'));
@@ -178,6 +181,31 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
     expect(results[0].slug).toBe('alpha-note');
   });
 
+  describe('tag/related string coercion — Zod schema wiring', () => {
+    // Construct the same schema used in create_note and update_note
+    const tagsSchema = z.preprocess(coerceStringArray, z.array(z.string()).optional());
+
+    test('schema coerces comma-separated string to array', () => {
+      expect(tagsSchema.parse('react, hooks, typescript')).toEqual(['react', 'hooks', 'typescript']);
+    });
+
+    test('schema coerces JSON-encoded string array to array', () => {
+      expect(tagsSchema.parse('["react","hooks"]')).toEqual(['react', 'hooks']);
+    });
+
+    test('schema passes through an actual array unchanged', () => {
+      expect(tagsSchema.parse(['react', 'hooks'])).toEqual(['react', 'hooks']);
+    });
+
+    test('schema accepts undefined', () => {
+      expect(tagsSchema.parse(undefined)).toBeUndefined();
+    });
+
+    test('schema coerces single bare string to single-element array', () => {
+      expect(tagsSchema.parse('typescript')).toEqual(['typescript']);
+    });
+  });
+
   // list_notes path filter
   describe('list_notes path filter', () => {
     beforeEach(async () => {
@@ -245,6 +273,36 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
         readError = e as Error;
       }
       expect(readError).not.toBeNull(); // tool would return isError: true
+    });
+  });
+
+  describe('coerceStringArray', () => {
+    test('passes through an existing array unchanged', () => {
+      expect(coerceStringArray(['tag1', 'tag2'])).toEqual(['tag1', 'tag2']);
+    });
+
+    test('parses a JSON-encoded string array', () => {
+      expect(coerceStringArray('["tag1", "tag2"]')).toEqual(['tag1', 'tag2']);
+    });
+
+    test('splits a comma-separated string into an array', () => {
+      expect(coerceStringArray('tag1, tag2, tag3')).toEqual(['tag1', 'tag2', 'tag3']);
+    });
+
+    test('wraps a single value with no commas in an array', () => {
+      expect(coerceStringArray('tag1')).toEqual(['tag1']);
+    });
+
+    test('returns undefined for undefined input', () => {
+      expect(coerceStringArray(undefined)).toBeUndefined();
+    });
+
+    test('returns undefined for null input', () => {
+      expect(coerceStringArray(null)).toBeUndefined();
+    });
+
+    test('trims whitespace from comma-separated values', () => {
+      expect(coerceStringArray('  tag1 ,  tag2  ')).toEqual(['tag1', 'tag2']);
     });
   });
 });

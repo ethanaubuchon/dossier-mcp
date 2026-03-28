@@ -4,6 +4,7 @@ import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mc
 import { z } from 'zod';
 import { NoteStore } from '../notes/NoteStore.js';
 import { SearchIndex } from '../search/SearchIndex.js';
+import { coerceStringArray } from './coerce.js';
 
 function isValidSlug(slug: string): boolean {
   return !slug.includes('..') && !slug.startsWith('/');
@@ -83,8 +84,8 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
       title: z.string().describe('The note title'),
       content: z.string().describe('Markdown content for the note body'),
       path: z.string().optional().describe('Vault-relative path for the note slug (e.g. "projects/startup/my-note"). Defaults to inbox/<title-slug>.'),
-      tags: z.array(z.string()).optional().describe('Tags to categorize the note'),
-      related: z.array(z.string()).optional().describe('Slugs of related notes'),
+      tags: z.preprocess(coerceStringArray, z.array(z.string()).optional()).describe('Tags to categorize the note'),
+      related: z.preprocess(coerceStringArray, z.array(z.string()).optional()).describe('Slugs of related notes'),
     },
     async ({ title, content, path: notePath, tags, related }) => {
       const slug = notePath ?? ('inbox/' + NoteStore.makeSlug(title));
@@ -114,8 +115,8 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
       slug: z.string().describe('The slug of the note to update'),
       title: z.string().describe('New title for the note'),
       content: z.string().describe('New markdown content for the note body'),
-      tags: z.array(z.string()).optional().describe('Updated tags'),
-      related: z.array(z.string()).optional().describe('Updated related note slugs'),
+      tags: z.preprocess(coerceStringArray, z.array(z.string()).optional()).describe('Updated tags'),
+      related: z.preprocess(coerceStringArray, z.array(z.string()).optional()).describe('Updated related note slugs'),
     },
     async ({ slug, title, content, tags, related }) => {
       if (!isValidSlug(slug)) return slugValidationError(slug);
