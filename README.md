@@ -14,7 +14,7 @@ npm install
 The server runs as a stdio process spawned by Claude Code. Register it with:
 
 ```bash
-claude mcp add -s user library -e NOTES_DIR=/home/ethan/vault -- <command>
+claude mcp add -s user library -e NOTES_DIR=/path/to/your/vault -- <command>
 ```
 
 ### Dev mode (no build step)
@@ -23,8 +23,8 @@ Uses `tsx` to run TypeScript directly. Slower startup, no build required.
 
 ```bash
 claude mcp add -s user library \
-  -e NOTES_DIR=/home/ethan/vault \
-  -- npx tsx /home/ethan/workspace/library/server/src/mcp-entry.ts
+  -e NOTES_DIR=/path/to/your/vault \
+  -- npx tsx /path/to/library/server/src/mcp-entry.ts
 ```
 
 ### Production mode
@@ -37,8 +37,8 @@ cd server && npm run build
 
 ```bash
 claude mcp add -s user library \
-  -e NOTES_DIR=/home/ethan/vault \
-  -- node /home/ethan/workspace/library/server/dist/mcp-entry.js
+  -e NOTES_DIR=/path/to/your/vault \
+  -- node /path/to/library/server/dist/mcp-entry.js
 ```
 
 ### Updating an existing registration
@@ -55,7 +55,7 @@ Then re-add with the command above.
 
 | Variable | Description |
 |---|---|
-| `NOTES_DIR` | Absolute path to the vault root (e.g. `/home/ethan/vault`) |
+| `NOTES_DIR` | Absolute path to the vault root (e.g. `/path/to/your/vault`) |
 
 ## Tools exposed to Claude
 
