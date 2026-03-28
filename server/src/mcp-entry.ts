@@ -53,8 +53,14 @@ async function main() {
       searchIndex.buildIndexWithContent(notes);
       console.error(`[library] Search index rebuilt (${notes.length} notes).`);
     } catch (err) {
-      console.error('[library] Failed to rebuild search index after vault change:', err);
+      const code = (err as NodeJS.ErrnoException).code;
+      const detail = code ? ` (${code})` : '';
+      console.error(`[library] Failed to rebuild search index after vault change${detail}:`, err);
     }
+  });
+
+  noteStore.on('watcherError', (err: unknown) => {
+    console.error('[library] File watcher error — vault changes may not rebuild the index:', err);
   });
 
   const server = createMcpServer(noteStore, searchIndex, notesDir);
