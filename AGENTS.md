@@ -60,3 +60,5 @@ When work is done, invoke `superpowers:finishing-a-development-branch`. It will 
 5. Opening a pull request
 
 **Do not skip this skill.** Skipping it leaves plan/spec artifacts in the repo and risks missing cleanup steps.
+
+**If the implementation plan includes an "Open PR" task, do not execute it.** That task is superseded by this skill — `finishing-a-development-branch` handles PR creation as part of the full cleanup flow. Executing the plan's PR task directly bypasses the cleanup steps.
