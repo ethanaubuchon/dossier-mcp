@@ -61,6 +61,42 @@ Then re-add with the command above.
 |---|---|
 | `NOTES_DIR` | Absolute path to the vault root (e.g. `/path/to/your/vault`) |
 
+## profile.md
+
+`get_profile` reads `$NOTES_DIR/profile.md` — a free-form markdown file at the vault root that serves as the bootstrap document for the AI. Think of it as an `AGENTS.md` for your notes: when the MCP server is activated, reading this file first orients the agent to the vault — how it's organized, what it contains, and how to navigate it effectively.
+
+What you put here is entirely up to you and your use case. Some possibilities:
+
+- **Personal context** — who you are, current projects, working preferences
+- **Vault structure** — how notes are organized, what naming conventions mean, which folders exist
+- **Usage instructions** — how the AI should interact with your notes, what to prioritize, what to avoid
+- **Domain context** — background knowledge the AI needs to be useful in your specific domain
+
+The file uses standard frontmatter followed by markdown:
+
+```markdown
+---
+title: Vault Profile
+date: '2026-01-01'
+tags:
+  - profile
+---
+# My Vault
+
+Brief description of what this vault contains and who it's for.
+
+## Structure
+
+How notes are organized — folders, naming conventions, key entry points.
+
+## How to Use This Vault
+
+Instructions for the AI: what to read first, how to search effectively,
+any conventions to follow when creating or updating notes.
+```
+
+If `profile.md` doesn't exist, `get_profile` returns a clear error message rather than failing silently.
+
 ## Tools exposed to Claude
 
 | Tool | Purpose |
