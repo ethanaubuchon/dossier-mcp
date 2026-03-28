@@ -47,11 +47,13 @@ async function main() {
   searchIndex.buildIndexWithContent(allNotes);
 
   noteStore.on('change', async () => {
+    console.error('[library] Vault change detected — rebuilding search index...');
     try {
       const notes = await noteStore.listWithContent();
       searchIndex.buildIndexWithContent(notes);
+      console.error(`[library] Search index rebuilt (${notes.length} notes).`);
     } catch (err) {
-      console.error('Failed to rebuild search index after vault change:', err);
+      console.error('[library] Failed to rebuild search index after vault change:', err);
     }
   });
 

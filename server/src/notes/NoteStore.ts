@@ -28,10 +28,19 @@ export class NoteStore extends EventEmitter {
       ignoreInitial: true,
       persistent: true,
       ignored: (filePath: string) => filePath.includes('.sync-conflict'),
+      // awaitWriteFinish handles Syncthing's atomic rename pattern: Syncthing
+      // writes to a temp file then renames it to the final path. Without this,
+      // chokidar may fire on the temp file or miss the rename entirely.
+      awaitWriteFinish: { stabilityThreshold: 500, pollInterval: 100 },
     });
 
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
     const onChange = () => {
-      this.emit('change');
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        debounceTimer = null;
+        this.emit('change');
+      }, 300).unref();
     };
 
     this.watcher.on('add', onChange);
