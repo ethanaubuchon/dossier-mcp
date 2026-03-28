@@ -10,3 +10,4 @@ client/dist/
 
 # TypeScript
 *.tsbuildinfo
+.worktrees/
