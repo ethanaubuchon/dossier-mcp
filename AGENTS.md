@@ -27,16 +27,16 @@ during your work, add it here before completing the session._
 
 ### Starting a Feature
 
+Always use a branch and worktree — even for small changes. This keeps main clean and other sessions unblocked.
+
 1. `git checkout main && git pull origin main`
 2. `git checkout -b <branch-name>`
-3. `git worktree add ../library-<branch-name> <branch-name>`
-
-Skip the worktree for trivial single-file fixes (≤ 2 files AND ≤ 50 lines changed).
+3. `git worktree add .worktrees/<branch-name> <branch-name>`
 
 ### Small Changes (≤ 2 files AND ≤ 50 lines)
 
 Skip brainstorm and plan. Go straight to:
-**TDD → verify → finish branch**
+**branch + worktree → TDD → verify → finish branch**
 
 ### Larger Features
 
