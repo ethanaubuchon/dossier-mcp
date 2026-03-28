@@ -47,7 +47,7 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
 
   server.tool(
     'list_notes',
-    'List notes in the knowledge base, sorted by date (newest first). Optionally filter by slug prefix to scope results to a folder.',
+    'List notes in the knowledge base, sorted by date (newest first). Optionally filter by slug prefix to scope results to a folder. If you haven\'t already, call get_vault_context first to orient yourself to this vault.',
     {
       path: z.string().optional().describe('Optional slug prefix to filter by (e.g. "projects/startup"). Trailing slash is normalized automatically.'),
     },
