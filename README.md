@@ -63,7 +63,7 @@ Then re-add with the command above.
 
 ## profile.md
 
-`get_profile` reads `$NOTES_DIR/profile.md` — a free-form markdown file at the vault root that serves as the bootstrap document for the AI. When the MCP server is activated, reading this file first orients the agent to the vault: how it's organized, what it contains, and how to navigate it effectively.
+`get_profile` reads `$NOTES_DIR/profile.md` — a free-form markdown file at the vault root that serves as the bootstrap document for the AI. Think of it as an `AGENTS.md` for your notes: when the MCP server is activated, reading this file first orients the agent to the vault — how it's organized, what it contains, and how to navigate it effectively.
 
 What you put here is entirely up to you and your use case. Some possibilities:
 
