@@ -115,6 +115,16 @@ If `profile.md` doesn't exist, `get_vault_context` returns a clear error message
 | `update_note` | Update an existing note by slug |
 | `delete_note` | Delete a note by slug |
 
+## Resources exposed to Claude
+
+MCP resources are read-only and can be enumerated by clients at startup, making them useful for discoverability.
+
+| Resource | Purpose |
+|---|---|
+| `vault://context` | Vault bootstrap document (`profile.md`). Read this first to orient to the vault. |
+| `notes://index` | Index of all notes with titles, tags, dates, and links to each `note://` URI. |
+| `note://{slug}` | Individual note content by slug (e.g. `note://projects/startup`). Discover slugs via `notes://index`. |
+
 ## Development
 
 ```bash
