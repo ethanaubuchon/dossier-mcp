@@ -55,5 +55,7 @@ When work is done:
 
 1. If you discovered any gotchas, add them to the **Key Gotchas** section above
 2. Commit changes with a clear message
-3. Push the branch
-4. Open a pull request
+3. Delete any `docs/superpowers/specs/` and `docs/superpowers/plans/` files created for this feature
+4. Commit the deletions: `chore: remove implementation plan`
+5. Push the branch
+6. Open a pull request
