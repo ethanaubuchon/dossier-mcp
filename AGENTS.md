@@ -2,8 +2,8 @@
 
 ## Stack
 
-- Server: `server/` — Node.js, Express, TypeScript (ESM), Jest
-- MCP: `server/src/mcp/` — Model Context Protocol server exposing note tools
+- Server: `server/` — Node.js, TypeScript (ESM), Jest
+- MCP: `server/src/mcp/` — Model Context Protocol server (stdio transport) exposing note tools and resources
 - Notes: Markdown files with YAML frontmatter, read from a vault directory via chokidar
 - Search: In-memory full-text search built on the note index
 
@@ -42,20 +42,21 @@ Skip brainstorm and plan. Go straight to:
 
 1. **Brainstorm** (`superpowers:brainstorming`) — explore intent, requirements, design
 2. **Write plan** (`superpowers:writing-plans`) — step-by-step implementation plan
-3. **Execute** (`superpowers:executing-plans`) — human reviews between each step
+3. **Execute** — choose one:
+   - `superpowers:subagent-driven-development` — fresh subagent per task with two-stage review (recommended)
+   - `superpowers:executing-plans` — inline execution with human checkpoints
 4. **Verify** (`superpowers:verification-before-completion`) — run tests, confirm output
 5. **Code review** (`superpowers:requesting-code-review`)
-6. **Finish branch** (`superpowers:finishing-a-development-branch`) — merge/PR/cleanup
-
-Always use `superpowers:executing-plans` to execute plans.
+6. **Finish branch** (`superpowers:finishing-a-development-branch`) — **REQUIRED, do not skip** — handles docs cleanup, merge/PR
 
 ## Completion
 
-When work is done:
+When work is done, invoke `superpowers:finishing-a-development-branch`. It will guide you through:
 
-1. If you discovered any gotchas, add them to the **Key Gotchas** section above
-2. Commit changes with a clear message
-3. Delete any `docs/superpowers/specs/` and `docs/superpowers/plans/` files created for this feature
-4. Commit the deletions: `chore: remove implementation plan`
-5. Push the branch
-6. Open a pull request
+1. Adding any discovered gotchas to the **Key Gotchas** section above
+2. Deleting `docs/superpowers/specs/` and `docs/superpowers/plans/` files created for this feature
+3. Committing deletions: `chore: remove implementation plan`
+4. Pushing the branch
+5. Opening a pull request
+
+**Do not skip this skill.** Skipping it leaves plan/spec artifacts in the repo and risks missing cleanup steps.
