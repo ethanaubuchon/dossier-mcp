@@ -142,4 +142,54 @@ describe('NoteStore', () => {
     const byList = await store.list();
     expect(byContent.map((n) => n.slug)).toEqual(byList.map((n) => n.slug));
   });
+
+  describe('watcher', () => {
+    const NOTE_FRONTMATTER = '---\ntitle: Note\ndate: 2026-01-01\ntags: []\nrelated: []\n---\n\nContent.';
+
+    function waitForChange(timeout = 3000): Promise<void> {
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(
+          () => reject(new Error('Timed out waiting for change event')),
+          timeout
+        );
+        store.once('change', () => {
+          clearTimeout(timer);
+          resolve();
+        });
+      });
+    }
+
+    test('emits change when a file is written directly', async () => {
+      const changed = waitForChange();
+      await fs.writeFile(path.join(dir, 'direct-write.md'), NOTE_FRONTMATTER);
+      await changed;
+    }, 4000);
+
+    test('emits change when a file is dropped via atomic rename (Syncthing pattern)', async () => {
+      const changed = waitForChange();
+      // Syncthing writes to a temp file then renames to the final .md path
+      const tmpPath = path.join(dir, 'syncthing-drop.md.tmp');
+      const finalPath = path.join(dir, 'syncthing-drop.md');
+      await fs.writeFile(tmpPath, NOTE_FRONTMATTER);
+      await fs.rename(tmpPath, finalPath);
+      await changed;
+    }, 4000);
+
+    test('debounces rapid file writes into a single change event', async () => {
+      let changeCount = 0;
+      store.on('change', () => { changeCount++; });
+
+      // Write several files at once to simulate a batch Syncthing sync
+      await Promise.all([
+        fs.writeFile(path.join(dir, 'batch-a.md'), NOTE_FRONTMATTER),
+        fs.writeFile(path.join(dir, 'batch-b.md'), NOTE_FRONTMATTER),
+        fs.writeFile(path.join(dir, 'batch-c.md'), NOTE_FRONTMATTER),
+      ]);
+
+      // Allow awaitWriteFinish (500 ms stability) + debounce (300 ms) + margin
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+
+      expect(changeCount).toBe(1);
+    }, 5000);
+  });
 });

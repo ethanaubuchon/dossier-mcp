@@ -20,32 +20,40 @@ export class NoteStore extends EventEmitter {
 
   async initialize(): Promise<void> {
     await fs.mkdir(this.notesDir, { recursive: true });
-    this.startWatcher();
+    await this.startWatcher();
   }
 
-  private startWatcher(): void {
-    this.watcher = chokidar.watch(path.join(this.notesDir, '**', '*.md'), {
-      ignoreInitial: true,
-      persistent: true,
-      ignored: (filePath: string) => filePath.includes('.sync-conflict'),
-      // awaitWriteFinish handles Syncthing's atomic rename pattern: Syncthing
-      // writes to a temp file then renames it to the final path. Without this,
-      // chokidar may fire on the temp file or miss the rename entirely.
-      awaitWriteFinish: { stabilityThreshold: 500, pollInterval: 100 },
+  private startWatcher(): Promise<void> {
+    return new Promise((resolve) => {
+      // Chokidar v4 dropped glob support — watch the directory directly and
+      // filter to .md files via `ignored`. The previous **/*.md glob was silently
+      // a no-op, so the watcher never fired on external (e.g. Syncthing) writes.
+      this.watcher = chokidar.watch(this.notesDir, {
+        ignoreInitial: true,
+        persistent: true,
+        ignored: (filePath: string) =>
+          filePath.includes('.sync-conflict') ||
+          (filePath !== this.notesDir && !filePath.endsWith('.md')),
+        // awaitWriteFinish handles Syncthing's atomic rename pattern: Syncthing
+        // writes to a temp file then renames it to the final path. Without this,
+        // chokidar may fire on the temp file or miss the rename entirely.
+        awaitWriteFinish: { stabilityThreshold: 500, pollInterval: 100 },
+      });
+
+      let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+      const onChange = () => {
+        if (debounceTimer) clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => {
+          debounceTimer = null;
+          this.emit('change');
+        }, 300).unref();
+      };
+
+      this.watcher.on('add', onChange);
+      this.watcher.on('change', onChange);
+      this.watcher.on('unlink', onChange);
+      this.watcher.once('ready', resolve);
     });
-
-    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-    const onChange = () => {
-      if (debounceTimer) clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(() => {
-        debounceTimer = null;
-        this.emit('change');
-      }, 300).unref();
-    };
-
-    this.watcher.on('add', onChange);
-    this.watcher.on('change', onChange);
-    this.watcher.on('unlink', onChange);
   }
 
   async close(): Promise<void> {
