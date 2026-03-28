@@ -220,9 +220,7 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
           contents: [{ uri: 'vault://context', text: raw, mimeType: 'text/markdown' }],
         };
       } catch {
-        return {
-          contents: [{ uri: 'vault://context', text: 'profile.md not found — create it at the vault root.', mimeType: 'text/markdown' }],
-        };
+        throw new Error('profile.md not found — create it at the vault root.');
       }
     }
   );

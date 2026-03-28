@@ -305,27 +305,4 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
       expect(coerceStringArray('  tag1 ,  tag2  ')).toEqual(['tag1', 'tag2']);
     });
   });
-
-  describe('vault://context resource', () => {
-    test('reads profile.md when it exists', async () => {
-      await fs.writeFile(
-        path.join(dir, 'profile.md'),
-        '# Vault\nHow to use this vault.'
-      );
-      const raw = await fs.readFile(path.join(dir, 'profile.md'), 'utf-8');
-      expect(raw).toContain('Vault');
-      expect(raw).toContain('How to use this vault.');
-    });
-
-    test('returns error text when profile.md is missing', async () => {
-      const profilePath = path.join(dir, 'profile.md');
-      let readError: Error | null = null;
-      try {
-        await fs.readFile(profilePath, 'utf-8');
-      } catch (e) {
-        readError = e as Error;
-      }
-      expect(readError).not.toBeNull();
-    });
-  });
 });
