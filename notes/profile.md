@@ -19,9 +19,8 @@ How this vault is organized — describe your folder conventions here.
 - `context/` — persistent personal context the agent maintains about you
 - `reference/` — reference material and resources
 
-## How to Use This Vault
+## Instructions for the Agent
 
-Instructions for the agent:
 - Read this file first at the start of any session
 - Check `inbox/` for unprocessed notes that may need organizing
 - Use `context/about-me.md` for personal context about the vault owner
