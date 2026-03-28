@@ -209,6 +209,24 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
     }
   );
 
+  server.resource(
+    'vault-context',
+    'vault://context',
+    { description: 'Vault bootstrap document (profile.md). Read this first to orient yourself to the vault — its structure, contents, and how to navigate it.' },
+    async () => {
+      try {
+        const raw = await fs.readFile(path.join(notesDir, 'profile.md'), 'utf-8');
+        return {
+          contents: [{ uri: 'vault://context', text: raw, mimeType: 'text/markdown' }],
+        };
+      } catch {
+        return {
+          contents: [{ uri: 'vault://context', text: 'profile.md not found — create it at the vault root.', mimeType: 'text/markdown' }],
+        };
+      }
+    }
+  );
+
   // Individual note resources via template
   const noteTemplate = new ResourceTemplate('note://{slug}', {
     list: async () => {
