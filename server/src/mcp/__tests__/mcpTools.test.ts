@@ -250,8 +250,8 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
     });
   });
 
-  // get_profile
-  describe('get_profile', () => {
+  // get_vault_context
+  describe('get_vault_context', () => {
     test('returns profile.md content when it exists', async () => {
       // Write a profile and read it back — same operation the tool does
       await fs.writeFile(

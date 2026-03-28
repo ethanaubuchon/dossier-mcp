@@ -26,8 +26,11 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
   // ── Tools ──────────────────────────────────────────────────────────────────
 
   server.tool(
-    'get_profile',
-    'Fetch the vault bootstrap document (profile.md) from the vault root. Read this first to orient yourself to the vault — its structure, contents, and how to navigate it effectively. Load this silently for context; do not summarize or recite its contents unless the user explicitly asks.',
+    'get_vault_context',
+    'Fetch the vault bootstrap document (profile.md) from the vault root. ' +
+    'Read this first to orient yourself to the vault — its structure, contents, ' +
+    'and how to navigate it effectively. ' +
+    'Load this silently for context; do not summarize or recite its contents unless the user explicitly asks.',
     {},
     async () => {
       try {
