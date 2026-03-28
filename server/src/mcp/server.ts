@@ -6,6 +6,15 @@ import { NoteStore } from '../notes/NoteStore.js';
 import { SearchIndex } from '../search/SearchIndex.js';
 import { coerceStringArray } from './coerce.js';
 
+export async function vaultContextHandler(notesDir: string) {
+  try {
+    const raw = await fs.readFile(path.join(notesDir, 'profile.md'), 'utf-8');
+    return { contents: [{ uri: 'vault://context', text: raw, mimeType: 'text/markdown' }] };
+  } catch {
+    throw new Error('profile.md not found — create it at the vault root.');
+  }
+}
+
 function isValidSlug(slug: string): boolean {
   return !slug.includes('..') && !slug.startsWith('/');
 }
@@ -213,16 +222,7 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
     'vault-context',
     'vault://context',
     { description: 'Vault bootstrap document (profile.md). Read this first to orient yourself to the vault — its structure, contents, and how to navigate it.' },
-    async () => {
-      try {
-        const raw = await fs.readFile(path.join(notesDir, 'profile.md'), 'utf-8');
-        return {
-          contents: [{ uri: 'vault://context', text: raw, mimeType: 'text/markdown' }],
-        };
-      } catch {
-        throw new Error('profile.md not found — create it at the vault root.');
-      }
-    }
+    () => vaultContextHandler(notesDir)
   );
 
   // Individual note resources via template

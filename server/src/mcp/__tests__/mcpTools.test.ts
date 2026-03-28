@@ -13,6 +13,7 @@ import { NoteStore } from '../../notes/NoteStore.js';
 import { SearchIndex } from '../../search/SearchIndex.js';
 import type { NoteListItem } from '../../types.js';
 import { coerceStringArray } from '../coerce.js';
+import { vaultContextHandler } from '../server.js';
 
 async function makeTmpDir(): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), 'library-mcp-test-'));
@@ -250,29 +251,21 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
     });
   });
 
-  // get_vault_context
-  describe('get_vault_context', () => {
-    test('returns profile.md content when it exists', async () => {
-      // Write a profile and read it back — same operation the tool does
-      await fs.writeFile(
-        path.join(dir, 'profile.md'),
-        '# Ethan\nSoftware engineer. Interested in startups.'
-      );
-      const raw = await fs.readFile(path.join(dir, 'profile.md'), 'utf-8');
-      expect(raw).toContain('Ethan');
-      expect(raw).toContain('Software engineer');
+  // vault://context resource handler
+  describe('vault://context resource', () => {
+    test('returns correct contents shape when profile.md exists', async () => {
+      await fs.writeFile(path.join(dir, 'profile.md'), '# My Vault\nPersonal notes.');
+      const result = await vaultContextHandler(dir);
+      expect(result.contents).toHaveLength(1);
+      expect(result.contents[0].uri).toBe('vault://context');
+      expect(result.contents[0].mimeType).toBe('text/markdown');
+      expect(result.contents[0].text).toContain('My Vault');
     });
 
-    test('returns error when profile.md is missing', async () => {
-      // Verify the file does not exist — the tool catch block returns isError
-      const profilePath = path.join(dir, 'profile.md');
-      let readError: Error | null = null;
-      try {
-        await fs.readFile(profilePath, 'utf-8');
-      } catch (e) {
-        readError = e as Error;
-      }
-      expect(readError).not.toBeNull(); // tool would return isError: true
+    test('throws when profile.md is missing', async () => {
+      await expect(vaultContextHandler(dir)).rejects.toThrow(
+        'profile.md not found — create it at the vault root.'
+      );
     });
   });
 
