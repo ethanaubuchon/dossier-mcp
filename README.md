@@ -61,6 +61,39 @@ Then re-add with the command above.
 |---|---|
 | `NOTES_DIR` | Absolute path to the vault root (e.g. `/path/to/your/vault`) |
 
+## profile.md
+
+`get_profile` reads `$NOTES_DIR/profile.md` — a free-form markdown file at the vault root that gives the AI persistent context about you. Think of it as a briefing document the agent reads at the start of a session to understand who you are, what you're working on, and how you prefer to collaborate.
+
+The file uses standard frontmatter followed by markdown:
+
+```markdown
+---
+title: Your Name — Profile
+date: '2026-01-01'
+tags:
+  - profile
+  - personal
+---
+# Your Name
+
+Brief bio, location, current role.
+
+## Work
+
+What you do, current projects, priorities.
+
+## Preferences
+
+How you like to work, communication style, tools.
+
+## Current Focus
+
+Active projects or goals the AI should be aware of.
+```
+
+The content is entirely up to you — write what would be useful for an AI collaborator to know. If `profile.md` doesn't exist, `get_profile` returns a clear error message rather than failing silently.
+
 ## Tools exposed to Claude
 
 | Tool | Purpose |
