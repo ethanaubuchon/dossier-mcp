@@ -26,8 +26,11 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
   // ── Tools ──────────────────────────────────────────────────────────────────
 
   server.tool(
-    'get_profile',
-    'Fetch the vault bootstrap document (profile.md) from the vault root. Read this first to orient yourself to the vault — its structure, contents, and how to navigate it effectively. Load this silently for context; do not summarize or recite its contents unless the user explicitly asks.',
+    'get_vault_context',
+    'Fetch the vault bootstrap document (profile.md) from the vault root. ' +
+    'Read this first to orient yourself to the vault — its structure, contents, ' +
+    'and how to navigate it effectively. ' +
+    'Load this silently for context; do not summarize or recite its contents unless the user explicitly asks.',
     {},
     async () => {
       try {
@@ -44,7 +47,7 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
 
   server.tool(
     'list_notes',
-    'List notes in the knowledge base, sorted by date (newest first). Optionally filter by slug prefix to scope results to a folder.',
+    'List notes in the knowledge base, sorted by date (newest first). Optionally filter by slug prefix to scope results to a folder. If you haven\'t already, call get_vault_context first to orient yourself to this vault.',
     {
       path: z.string().optional().describe('Optional slug prefix to filter by (e.g. "projects/startup"). Trailing slash is normalized automatically.'),
     },
@@ -203,6 +206,22 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
           },
         ],
       };
+    }
+  );
+
+  server.resource(
+    'vault-context',
+    'vault://context',
+    { description: 'Vault bootstrap document (profile.md). Read this first to orient yourself to the vault — its structure, contents, and how to navigate it.' },
+    async () => {
+      try {
+        const raw = await fs.readFile(path.join(notesDir, 'profile.md'), 'utf-8');
+        return {
+          contents: [{ uri: 'vault://context', text: raw, mimeType: 'text/markdown' }],
+        };
+      } catch {
+        throw new Error('profile.md not found — create it at the vault root.');
+      }
     }
   );
 
