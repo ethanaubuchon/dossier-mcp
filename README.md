@@ -63,7 +63,7 @@ Then re-add with the command above.
 
 ## profile.md
 
-`get_profile` reads `$NOTES_DIR/profile.md` — a free-form markdown file at the vault root that serves as the bootstrap document for the AI. Think of it as an `AGENTS.md` for your notes: when the MCP server is activated, reading this file first orients the agent to the vault — how it's organized, what it contains, and how to navigate it effectively.
+`get_vault_context` reads `$NOTES_DIR/profile.md` — a free-form markdown file at the vault root that serves as the bootstrap document for the AI. Think of it as an `AGENTS.md` for your notes: when the MCP server is activated, reading this file first orients the agent to the vault — how it's organized, what it contains, and how to navigate it effectively.
 
 What you put here is entirely up to you and your use case. Some possibilities:
 
@@ -95,13 +95,13 @@ Instructions for the AI: what to read first, how to search effectively,
 any conventions to follow when creating or updating notes.
 ```
 
-If `profile.md` doesn't exist, `get_profile` returns a clear error message rather than failing silently.
+If `profile.md` doesn't exist, `get_vault_context` returns a clear error message rather than failing silently.
 
 ## Tools exposed to Claude
 
 | Tool | Purpose |
 |---|---|
-| `get_profile` | Read `$NOTES_DIR/profile.md` for personal context |
+| `get_vault_context` | Read `$NOTES_DIR/profile.md` — vault bootstrap document; read this first |
 | `list_notes` | List notes; optional `path` prefix filter (e.g. `projects/startup`) |
 | `get_note` | Fetch a note by slug |
 | `search_notes` | Full-text keyword search |
