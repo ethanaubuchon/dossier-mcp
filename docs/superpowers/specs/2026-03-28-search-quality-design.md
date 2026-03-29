@@ -1,6 +1,6 @@
 # Search Quality Improvement — BM25 + Prefix Matching + Field Boosting
 
-**Issue:** [#3 — Search quality is weak for indirect or title-mismatch queries](https://github.com/ethanaubuchon/library/issues/3)
+**Issue:** [#3 — Search quality is weak for indirect or title-mismatch queries](https://github.com/ethanaubuchon/dossier-mcp/issues/3)
 **Date:** 2026-03-28
 **Status:** Approved design, pending implementation
 

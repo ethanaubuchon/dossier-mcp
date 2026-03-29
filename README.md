@@ -1,6 +1,6 @@
-# library-mcp
+# dossier-mcp
 
-AI agents forget everything between sessions, and Claude's built-in memory is project-scoped. library-mcp gives your agent a persistent, cross-project memory: architectural decisions, ongoing priorities, and context that doesn't belong to any one project — stored as Markdown in a vault you can read and edit via the [Model Context Protocol](https://modelcontextprotocol.io).
+AI agents forget everything between sessions, and Claude's built-in memory is project-scoped. dossier-mcp gives your agent a persistent, cross-project memory: architectural decisions, ongoing priorities, and context that doesn't belong to any one project — stored as Markdown in a vault you can read and edit via the [Model Context Protocol](https://modelcontextprotocol.io).
 
 Built and tested with [Claude Code](https://claude.ai/code). Any MCP-compatible coding agent should work — the server uses standard stdio transport. Registration commands below are Claude Code-specific; other clients will have their own configuration method.
 
@@ -23,20 +23,14 @@ npm install
 
 The following commands are for Claude Code. Other MCP clients will have their own way to register a stdio server — point them at the same binary with `NOTES_DIR` set.
 
-Register with Claude Code:
-
-```bash
-claude mcp add -s user library -e NOTES_DIR=/path/to/your/vault -- <command>
-```
-
 ### Dev mode (no build step)
 
 Uses `tsx` to run TypeScript directly. Slower startup, no build required.
 
 ```bash
-claude mcp add -s user library \
+claude mcp add -s user dossier-mcp \
   -e NOTES_DIR=/path/to/your/vault \
-  -- npx tsx /path/to/library/server/src/mcp-entry.ts
+  -- npx tsx /path/to/dossier-mcp/server/src/mcp-entry.ts
 ```
 
 ### Production mode
@@ -48,17 +42,17 @@ cd server && npm run build
 ```
 
 ```bash
-claude mcp add -s user library \
+claude mcp add -s user dossier-mcp \
   -e NOTES_DIR=/path/to/your/vault \
-  -- node /path/to/library/server/dist/mcp-entry.js
+  -- node /path/to/dossier-mcp/server/dist/mcp-entry.js
 ```
 
 ### Updating an existing registration
 
-`claude mcp add` will error if `library` is already registered. Remove it first:
+`claude mcp add` will error if `dossier-mcp` is already registered. Remove it first:
 
 ```bash
-claude mcp remove library
+claude mcp remove dossier-mcp
 ```
 
 Then re-add with the command above.

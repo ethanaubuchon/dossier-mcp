@@ -10,7 +10,7 @@ related:
 ---
 # Getting Started with Your Vault
 
-Welcome to the library MCP. This note explains how the vault works and what to do first.
+Welcome to dossier-mcp. This note explains how the vault works and what to do first.
 
 ## How This Works
 
