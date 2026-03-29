@@ -262,7 +262,21 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
     'notes://index',
     { description: 'Index of all notes in the knowledge base' },
     async () => {
-      const notes = await noteStore.list();
+      let notes;
+      try {
+        notes = await noteStore.list();
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return {
+          contents: [
+            {
+              uri: 'notes://index',
+              text: `# Knowledge Base Notes\n\nFailed to list notes: ${msg}`,
+              mimeType: 'text/markdown',
+            },
+          ],
+        };
+      }
       const lines = notes.map(
         (n) => `- [${n.frontmatter.title}](note://${encodeURIComponent(n.slug)}) — ${n.frontmatter.date} [${n.frontmatter.tags.join(', ')}]`
       );
@@ -288,7 +302,12 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
   // Individual note resources via template
   const noteTemplate = new ResourceTemplate('note://{slug}', {
     list: async () => {
-      const notes = await noteStore.list();
+      let notes;
+      try {
+        notes = await noteStore.list();
+      } catch {
+        return { resources: [] };
+      }
       return {
         resources: notes.map((n) => ({
           uri: `note://${encodeURIComponent(n.slug)}`,
@@ -305,7 +324,13 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
     noteTemplate,
     { description: 'A single note from the knowledge base, identified by its slug' },
     async (uri, { slug }) => {
-      const note = await noteStore.get(decodeURIComponent(slug as string));
+      let note;
+      try {
+        note = await noteStore.get(decodeURIComponent(slug as string));
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        throw new Error(`Failed to read note "${slug}": ${msg}`);
+      }
       if (!note) {
         throw new Error(`Note "${slug}" not found`);
       }
