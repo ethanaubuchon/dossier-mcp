@@ -129,16 +129,15 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
       const slug = notePath ?? ('inbox/' + NoteStore.makeSlug(title));
       if (!isValidSlug(slug)) return slugValidationError(slug);
 
-      const existing = await noteStore.get(slug);
-      if (existing) {
-        return {
-          isError: true,
-          content: [{ type: 'text', text: `Note already exists at "${slug}" — use update_note to modify it.` }],
-        };
-      }
-
       let note;
       try {
+        const existing = await noteStore.get(slug);
+        if (existing) {
+          return {
+            isError: true,
+            content: [{ type: 'text', text: `Note already exists at "${slug}" — use update_note to modify it.` }],
+          };
+        }
         note = await noteStore.upsert({ slug, title, content, tags, related });
         const allNotes = await noteStore.listWithContent();
         searchIndex.buildIndexWithContent(allNotes);
@@ -166,19 +165,19 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
     },
     async ({ slug, title, content, tags, related }) => {
       if (!isValidSlug(slug)) return slugValidationError(slug);
-      const existing = await noteStore.get(slug);
-      if (!existing) {
-        return {
-          content: [{ type: 'text', text: `Note "${slug}" not found.` }],
-          isError: true,
-        };
-      }
-      const resolved = resolveFrontmatterParams({ title, content, tags, related });
-      if (!resolved.ok) {
-        return { isError: true, content: [{ type: 'text', text: resolved.error }] };
-      }
       let note;
       try {
+        const existing = await noteStore.get(slug);
+        if (!existing) {
+          return {
+            content: [{ type: 'text', text: `Note "${slug}" not found.` }],
+            isError: true,
+          };
+        }
+        const resolved = resolveFrontmatterParams({ title, content, tags, related });
+        if (!resolved.ok) {
+          return { isError: true, content: [{ type: 'text', text: resolved.error }] };
+        }
         note = await noteStore.upsert({ slug, title: resolved.title, content: resolved.content, tags: resolved.tags, related: resolved.related });
         const allNotes = await noteStore.listWithContent();
         searchIndex.buildIndexWithContent(allNotes);
@@ -232,7 +231,13 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
       limit: z.number().optional().describe('Maximum number of results to return (default: 10)'),
     },
     async ({ query, limit }) => {
-      const results = searchIndex.search(query, limit ?? 10);
+      let results;
+      try {
+        results = searchIndex.search(query, limit ?? 10);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return { isError: true, content: [{ type: 'text', text: `Search failed: ${msg}` }] };
+      }
       if (results.length === 0) {
         return {
           content: [{ type: 'text', text: `No notes found matching "${query}".` }],
