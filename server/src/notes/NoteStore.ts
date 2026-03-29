@@ -246,6 +246,7 @@ export class NoteStore extends EventEmitter {
     const updatedSlugs: string[] = [];
     const allNotes = await this.listWithContent();
     for (const entry of allNotes) {
+      if (entry.slug === newSlug) continue; // Skip the moved note itself to preserve its raw content
       if (entry.frontmatter.related.includes(oldSlug)) {
         const newRelated = entry.frontmatter.related.map((r) => (r === oldSlug ? newSlug : r));
         await this.upsert({
