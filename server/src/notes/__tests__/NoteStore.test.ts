@@ -250,6 +250,18 @@ describe('NoteStore', () => {
       // 'root' should still exist (has sibling.md)
       await expect(fs.access(path.join(dir, 'root'))).resolves.toBeUndefined();
     });
+
+    test('delete still succeeds when directory cleanup fails', async () => {
+      await store.upsert({ slug: 'locked/child/note', title: 'Note', content: 'Body.' });
+      // Make the parent non-removable
+      await fs.chmod(path.join(dir, 'locked'), 0o555);
+
+      const deleted = await store.delete('locked/child/note');
+      expect(deleted).toBe(true);
+
+      // Cleanup: restore permissions so afterEach can rm
+      await fs.chmod(path.join(dir, 'locked'), 0o755);
+    });
   });
 
   describe('watcher', () => {

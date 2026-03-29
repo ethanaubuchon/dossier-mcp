@@ -225,7 +225,7 @@ export class NoteStore extends EventEmitter {
 
   private async pruneEmptyParents(filePath: string): Promise<void> {
     let current = path.dirname(filePath);
-    while (current !== this.notesDir && current.startsWith(this.notesDir)) {
+    while (current !== this.notesDir && current.startsWith(this.notesDir + path.sep)) {
       try {
         await fs.rmdir(current);
       } catch {
