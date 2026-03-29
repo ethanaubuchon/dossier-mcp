@@ -72,14 +72,20 @@ export class SearchIndex {
 
     const results: SearchResult[] = [];
 
+    // Precompute IDF per query term to avoid redundant O(entries) scans
+    const idfMap = new Map<string, number>();
+    for (const term of queryTerms) {
+      const n = this.getDocFrequency(term);
+      idfMap.set(term, Math.log((this.docCount - n + 0.5) / (n + 0.5) + 1));
+    }
+
     for (const entry of this.entries) {
       let score = 0;
       for (const term of queryTerms) {
         const tf = this.getTermFrequency(entry, term);
         if (tf === 0) continue;
 
-        const n = this.getDocFrequency(term);
-        const idf = Math.log((this.docCount - n + 0.5) / (n + 0.5) + 1);
+        const idf = idfMap.get(term)!;
         const tfNorm =
           (tf * (BM25_K1 + 1)) /
           (tf + BM25_K1 * (1 - BM25_B + BM25_B * (entry.docLen / this.avgDocLen)));
