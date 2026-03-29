@@ -200,6 +200,38 @@ describe('SearchIndex', () => {
     expect(results[0].excerpt.toLowerCase()).toContain('thinkpad');
   });
 
+  test('issue #3 regression: finds ThinkPad note by indirect queries', () => {
+    index.buildIndexWithContent([
+      {
+        slug: 'hardware/thinkpad-x1-carbon',
+        frontmatter: {
+          title: 'Hardware — ThinkPad X1 Carbon (Arch Laptop)',
+          date: '2026-01-01',
+          tags: ['hardware', 'laptop', 'arch-linux'],
+          related: [],
+        },
+        content:
+          'Spec sheet and setup notes for the ThinkPad X1 Carbon running Arch Linux. ' +
+          'Todo: document BIOS settings and power management.',
+      },
+      {
+        slug: 'projects/startup/index',
+        frontmatter: { title: 'Startup Project', date: '2026-01-01', tags: ['project'], related: [] },
+        content: 'Unrelated startup content.',
+      },
+    ]);
+
+    // "ThinkPad" — direct title term
+    const r1 = index.search('ThinkPad');
+    expect(r1.length).toBeGreaterThanOrEqual(1);
+    expect(r1[0].slug).toBe('hardware/thinkpad-x1-carbon');
+
+    // "spec laptop todo" — indirect multi-field query
+    const r2 = index.search('spec laptop todo');
+    expect(r2.length).toBeGreaterThanOrEqual(1);
+    expect(r2[0].slug).toBe('hardware/thinkpad-x1-carbon');
+  });
+
   test('buildIndexWithContent indexes related slugs', () => {
     index.buildIndexWithContent([
       {
