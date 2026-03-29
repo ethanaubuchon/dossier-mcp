@@ -98,6 +98,45 @@ describe('SearchIndex', () => {
     expect(results[3].slug).toBe('body-hit');
   });
 
+  test('BM25: same term in short note scores higher than in long note', () => {
+    index.buildIndexWithContent([
+      {
+        slug: 'short',
+        frontmatter: { title: 'Kubernetes', date: '2026-01-01', tags: [], related: [] },
+        content: '',
+      },
+      {
+        slug: 'long',
+        frontmatter: { title: 'Kubernetes', date: '2026-01-01', tags: [], related: [] },
+        content: 'word '.repeat(500),
+      },
+    ]);
+    const results = index.search('kubernetes');
+    expect(results.length).toBe(2);
+    expect(results[0].slug).toBe('short');
+  });
+
+  test('BM25: term saturation — 10 occurrences do not score 10x higher than 1', () => {
+    index.buildIndexWithContent([
+      {
+        slug: 'once',
+        frontmatter: { title: 'Note', date: '2026-01-01', tags: [], related: [] },
+        content: 'kubernetes is useful',
+      },
+      {
+        slug: 'ten-times',
+        frontmatter: { title: 'Note', date: '2026-01-01', tags: [], related: [] },
+        content: Array(10).fill('kubernetes').join(' and '),
+      },
+    ]);
+    const results = index.search('kubernetes');
+    const scoreOnce = results.find((r) => r.slug === 'once')!.score;
+    const scoreTen = results.find((r) => r.slug === 'ten-times')!.score;
+    // With saturation, 10x occurrences should score well under 5x (not 10x)
+    expect(scoreTen / scoreOnce).toBeLessThan(5);
+    expect(scoreTen).toBeGreaterThan(scoreOnce);
+  });
+
   test('buildIndexWithContent indexes related slugs', () => {
     index.buildIndexWithContent([
       {

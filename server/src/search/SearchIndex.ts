@@ -1,5 +1,8 @@
 import type { NoteListItem, SearchResult } from '../types.js';
 
+const BM25_K1 = 1.2;
+const BM25_B = 0.75;
+
 const FIELD_WEIGHTS = {
   title: 3.0,
   tags: 2.0,
@@ -72,10 +75,15 @@ export class SearchIndex {
     for (const entry of this.entries) {
       let score = 0;
       for (const term of queryTerms) {
-        const freq = entry.terms.get(term) || 0;
-        // Title matches score higher
-        const titleMatch = entry.frontmatter.title.toLowerCase().includes(term) ? 3 : 0;
-        score += freq + titleMatch;
+        const tf = entry.terms.get(term) || 0;
+        if (tf === 0) continue;
+
+        const n = this.docFreq.get(term) || 0;
+        const idf = Math.log((this.docCount - n + 0.5) / (n + 0.5) + 1);
+        const tfNorm =
+          (tf * (BM25_K1 + 1)) /
+          (tf + BM25_K1 * (1 - BM25_B + BM25_B * (entry.docLen / this.avgDocLen)));
+        score += idf * tfNorm;
       }
       if (score > 0) {
         results.push({
