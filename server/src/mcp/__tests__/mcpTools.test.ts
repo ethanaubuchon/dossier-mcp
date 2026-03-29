@@ -313,7 +313,37 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
     test('strips frontmatter from content body when frontmatter is present', () => {
       const content = '---\ntitle: My Note\n---\n\nActual body here.';
       const result = resolveFrontmatterParams({ title: undefined, content, tags: undefined, related: undefined });
-      expect(result).toMatchObject({ ok: true, content: expect.not.stringContaining('---') });
+      expect(result).toMatchObject({ ok: true, content: 'Actual body here.' });
+    });
+
+    test('returns error with YAML details when content has malformed frontmatter', () => {
+      const content = '---\ntitle: foo: bar: baz\ntags: [unclosed\n---\nBody.';
+      const result = resolveFrontmatterParams({ title: undefined, content, tags: undefined, related: undefined });
+      expect(result).toMatchObject({ ok: false, error: expect.stringMatching(/yaml/i) });
+    });
+
+    test('explicit related overrides frontmatter related', () => {
+      const content = '---\ntitle: Note\nrelated:\n  - old/note\n---\nBody.';
+      const result = resolveFrontmatterParams({ title: undefined, content, tags: undefined, related: ['new/note'] });
+      expect(result).toMatchObject({ ok: true, related: ['new/note'] });
+    });
+
+    test('returns error when title is empty string', () => {
+      const result = resolveFrontmatterParams({ title: '', content: 'Body.', tags: undefined, related: undefined });
+      expect(result).toMatchObject({ ok: false, error: expect.stringContaining('title') });
+    });
+
+    test('round-trip: get_note raw output can be passed back to resolveFrontmatterParams', async () => {
+      await noteStore.upsert({ slug: 'inbox/round-trip-note', title: 'Round Trip Note', content: 'Round trip body.', tags: ['rt'] });
+      const note = await noteStore.get('inbox/round-trip-note');
+      expect(note).not.toBeNull();
+      const result = resolveFrontmatterParams({ title: undefined, content: note!.raw, tags: undefined, related: undefined });
+      expect(result).toMatchObject({ ok: true, title: 'Round Trip Note' });
+      if (result.ok) {
+        expect(result.content.trim()).toBe('Round trip body.');
+        expect(result.tags).toEqual(['rt']);
+        expect(result.content).not.toContain('---');
+      }
     });
   });
 

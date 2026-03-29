@@ -145,7 +145,7 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
       if (!resolved.ok) {
         return { isError: true, content: [{ type: 'text', text: resolved.error }] };
       }
-      const note = await noteStore.upsert({ slug, ...resolved });
+      const note = await noteStore.upsert({ slug, title: resolved.title, content: resolved.content, tags: resolved.tags, related: resolved.related });
       const allNotes = await noteStore.listWithContent();
       searchIndex.buildIndexWithContent(allNotes);
       return {

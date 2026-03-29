@@ -9,9 +9,9 @@ type ResolveFailed = { ok: false; error: string };
  * When an agent receives a note via get_note (which returns raw markdown including
  * frontmatter) and passes it back to update_note, the frontmatter is embedded in the
  * content string rather than as separate params. This function handles that round-trip:
- * if title is absent, it extracts title/tags/related from frontmatter in content and
- * strips the frontmatter from the body. Explicit params always take precedence over
- * frontmatter values.
+ * it extracts title/tags/related from frontmatter in content and strips the frontmatter
+ * from the body whenever frontmatter is present. Explicit params always take precedence
+ * over frontmatter values.
  */
 export function resolveFrontmatterParams(params: {
   title: string | undefined;
@@ -20,10 +20,19 @@ export function resolveFrontmatterParams(params: {
   related: string[] | undefined;
 }): ResolvedParams | ResolveFailed {
   const { tags, related } = params;
-  const parsed = matter(params.content);
+
+  let parsed: matter.GrayMatterFile<string>;
+  try {
+    parsed = matter(params.content);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { ok: false, error: `Invalid YAML frontmatter: ${msg}` };
+  }
+
   const hasFrontmatter = Object.keys(parsed.data).length > 0;
 
-  const title = params.title ?? (hasFrontmatter ? (parsed.data.title as string | undefined) : undefined);
+  const rawTitle = params.title ?? (hasFrontmatter ? parsed.data.title : undefined);
+  const title = typeof rawTitle === 'string' ? rawTitle : undefined;
   if (!title) {
     return { ok: false, error: 'title is required — pass it as a separate param or include it in frontmatter' };
   }
