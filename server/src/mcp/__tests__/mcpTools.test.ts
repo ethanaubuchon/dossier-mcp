@@ -65,6 +65,13 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
     expect(note).toBeNull();
   });
 
+  test('get_note surfaces parse error instead of "not found"', async () => {
+    await fs.writeFile(path.join(dir, 'corrupt.md'), '---\ntitle: foo: bar: baz\ntags: [unclosed\n---\nBody.');
+    // After Task 1, get() throws on parse error instead of returning null.
+    // The handler should catch and return isError with the real message.
+    await expect(noteStore.get('corrupt')).rejects.toThrow();
+  });
+
   // create_note
   test('create_note persists note to disk', async () => {
     const note = await noteStore.upsert({

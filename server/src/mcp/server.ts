@@ -93,7 +93,16 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
     { slug: z.string().describe('The note slug (e.g. "react-hooks-rules")') },
     async ({ slug }) => {
       if (!isValidSlug(slug)) return slugValidationError(slug);
-      const note = await noteStore.get(slug);
+      let note;
+      try {
+        note = await noteStore.get(slug);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Failed to read note "${slug}": ${msg}` }],
+        };
+      }
       if (!note) {
         return {
           content: [{ type: 'text', text: `Note "${slug}" not found.` }],
