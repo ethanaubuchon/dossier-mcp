@@ -161,18 +161,20 @@ export class NoteStore extends EventEmitter {
   }
 
   async get(slug: string): Promise<Note | null> {
+    let raw: string;
     try {
-      const raw = await fs.readFile(this.notePath(slug), 'utf-8');
-      const parsed = matter(raw);
-      return {
-        slug,
-        frontmatter: this.parseFrontmatter(parsed.data),
-        content: parsed.content,
-        raw,
-      };
-    } catch {
-      return null;
+      raw = await fs.readFile(this.notePath(slug), 'utf-8');
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw e;
     }
+    const parsed = matter(raw);
+    return {
+      slug,
+      frontmatter: this.parseFrontmatter(parsed.data),
+      content: parsed.content,
+      raw,
+    };
   }
 
   async upsert(data: {

@@ -54,6 +54,18 @@ describe('NoteStore', () => {
     expect(note).toBeNull();
   });
 
+  test('get() throws on malformed frontmatter (not ENOENT)', async () => {
+    await fs.writeFile(path.join(dir, 'bad-note.md'), '---\ntitle: foo: bar: baz\ntags: [unclosed\n---\nBody.');
+    await expect(store.get('bad-note')).rejects.toThrow();
+  });
+
+  test('get() throws on permission error (not ENOENT)', async () => {
+    await fs.writeFile(path.join(dir, 'locked.md'), '---\ntitle: Locked\n---\nBody.');
+    await fs.chmod(path.join(dir, 'locked.md'), 0o000);
+    await expect(store.get('locked')).rejects.toThrow();
+    await fs.chmod(path.join(dir, 'locked.md'), 0o644); // cleanup for afterEach rm
+  });
+
   test('upsert merges with existing note preserving date', async () => {
     await store.upsert({ title: 'My Note', content: 'v1' });
     const first = await store.get('my-note');
