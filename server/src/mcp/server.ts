@@ -111,9 +111,15 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
         };
       }
 
-      const note = await noteStore.upsert({ slug, title, content, tags, related });
-      const allNotes = await noteStore.listWithContent();
-      searchIndex.buildIndexWithContent(allNotes);
+      let note;
+      try {
+        note = await noteStore.upsert({ slug, title, content, tags, related });
+        const allNotes = await noteStore.listWithContent();
+        searchIndex.buildIndexWithContent(allNotes);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return { isError: true, content: [{ type: 'text', text: `Failed to write note "${slug}": ${msg}` }] };
+      }
       return {
         content: [{ type: 'text', text: `Created note "${note.frontmatter.title}" with slug "${note.slug}".` }],
       };

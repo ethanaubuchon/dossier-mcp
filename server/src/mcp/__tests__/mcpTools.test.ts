@@ -307,7 +307,8 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
 
     test('returns error when title is absent and content has no frontmatter', () => {
       const result = resolveFrontmatterParams({ title: undefined, content: 'Just body text.', tags: undefined, related: undefined });
-      expect(result).toMatchObject({ ok: false, error: expect.stringContaining('title') });
+      expect(result).toMatchObject({ ok: false, error: expect.stringContaining('include it in frontmatter') });
+      expect(result.ok === false && result.error).not.toMatch(/frontmatter was detected/i);
     });
 
     test('strips frontmatter from content body when frontmatter is present', () => {
