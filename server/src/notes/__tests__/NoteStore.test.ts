@@ -309,6 +309,37 @@ describe('NoteStore', () => {
       await store.upsert({ slug: 'target', title: 'Target', content: 'B.' });
       await expect(store.move('source', 'target')).rejects.toThrow('already exists');
     });
+
+    test('move updates related fields in other notes that reference old slug', async () => {
+      await store.upsert({ slug: 'target-note', title: 'Target', content: 'Body.' });
+      await store.upsert({ slug: 'referrer-a', title: 'A', content: 'Body.', related: ['target-note', 'other'] });
+      await store.upsert({ slug: 'referrer-b', title: 'B', content: 'Body.', related: ['target-note'] });
+      await store.upsert({ slug: 'no-ref', title: 'C', content: 'Body.', related: ['something-else'] });
+
+      const result = await store.move('target-note', 'new-location');
+
+      // Check updatedRefs
+      expect(result.updatedRefs).toContain('referrer-a');
+      expect(result.updatedRefs).toContain('referrer-b');
+      expect(result.updatedRefs).not.toContain('no-ref');
+
+      // Verify the actual related fields were updated
+      const a = await store.get('referrer-a');
+      expect(a!.frontmatter.related).toEqual(['new-location', 'other']);
+
+      const b = await store.get('referrer-b');
+      expect(b!.frontmatter.related).toEqual(['new-location']);
+
+      // Verify non-referencing note is untouched
+      const c = await store.get('no-ref');
+      expect(c!.frontmatter.related).toEqual(['something-else']);
+    });
+
+    test('move returns empty updatedRefs when no notes reference old slug', async () => {
+      await store.upsert({ slug: 'lonely', title: 'Lonely', content: 'Body.' });
+      const result = await store.move('lonely', 'still-lonely');
+      expect(result.updatedRefs).toEqual([]);
+    });
   });
 
   describe('watcher', () => {
