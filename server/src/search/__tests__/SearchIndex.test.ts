@@ -67,6 +67,171 @@ describe('SearchIndex', () => {
     expect(typeof results[0].excerpt).toBe('string');
   });
 
+  test('field boosting: title match > tag match > related match > body match', () => {
+    index.buildIndexWithContent([
+      {
+        slug: 'title-hit',
+        frontmatter: { title: 'Kubernetes Guide', date: '2026-01-01', tags: [], related: [] },
+        content: 'A guide about containers.',
+      },
+      {
+        slug: 'tag-hit',
+        frontmatter: { title: 'Container Guide', date: '2026-01-01', tags: ['kubernetes'], related: [] },
+        content: 'A guide about containers.',
+      },
+      {
+        slug: 'related-hit',
+        frontmatter: { title: 'Container Guide', date: '2026-01-01', tags: [], related: ['kubernetes-overview'] },
+        content: 'A guide about containers.',
+      },
+      {
+        slug: 'body-hit',
+        frontmatter: { title: 'Container Guide', date: '2026-01-01', tags: [], related: [] },
+        content: 'Learn about kubernetes orchestration.',
+      },
+    ]);
+    const results = index.search('kubernetes');
+    expect(results.length).toBe(4);
+    expect(results[0].slug).toBe('title-hit');
+    expect(results[1].slug).toBe('tag-hit');
+    expect(results[2].slug).toBe('related-hit');
+    expect(results[3].slug).toBe('body-hit');
+  });
+
+  test('BM25: same term in short note scores higher than in long note', () => {
+    index.buildIndexWithContent([
+      {
+        slug: 'short',
+        frontmatter: { title: 'Kubernetes', date: '2026-01-01', tags: [], related: [] },
+        content: '',
+      },
+      {
+        slug: 'long',
+        frontmatter: { title: 'Kubernetes', date: '2026-01-01', tags: [], related: [] },
+        content: 'word '.repeat(500),
+      },
+    ]);
+    const results = index.search('kubernetes');
+    expect(results.length).toBe(2);
+    expect(results[0].slug).toBe('short');
+  });
+
+  test('BM25: term saturation — 10 occurrences do not score 10x higher than 1', () => {
+    index.buildIndexWithContent([
+      {
+        slug: 'once',
+        frontmatter: { title: 'Note', date: '2026-01-01', tags: [], related: [] },
+        content: 'kubernetes is useful',
+      },
+      {
+        slug: 'ten-times',
+        frontmatter: { title: 'Note', date: '2026-01-01', tags: [], related: [] },
+        content: Array(10).fill('kubernetes').join(' and '),
+      },
+    ]);
+    const results = index.search('kubernetes');
+    const scoreOnce = results.find((r) => r.slug === 'once')!.score;
+    const scoreTen = results.find((r) => r.slug === 'ten-times')!.score;
+    // With saturation, 10x occurrences should score well under 5x (not 10x)
+    expect(scoreTen / scoreOnce).toBeLessThan(5);
+    expect(scoreTen).toBeGreaterThan(scoreOnce);
+  });
+
+  test('prefix matching: query "think" matches note containing "thinkpad"', () => {
+    index.buildIndexWithContent([
+      {
+        slug: 'laptop',
+        frontmatter: { title: 'Hardware — ThinkPad X1 Carbon', date: '2026-01-01', tags: ['hardware'], related: [] },
+        content: 'Arch Linux laptop setup notes.',
+      },
+    ]);
+    const results = index.search('think');
+    expect(results).toHaveLength(1);
+    expect(results[0].slug).toBe('laptop');
+  });
+
+  test('prefix matching: sums frequencies when prefix matches multiple terms', () => {
+    index.buildIndexWithContent([
+      {
+        slug: 'a',
+        frontmatter: { title: 'Note', date: '2026-01-01', tags: [], related: [] },
+        content: 'computer components computation',
+      },
+    ]);
+    const results = index.search('comp');
+    expect(results).toHaveLength(1);
+    expect(results[0].score).toBeGreaterThan(0);
+  });
+
+  test('prefix matching: minimum length 3 — two-char terms require exact match', () => {
+    index.buildIndexWithContent([
+      {
+        slug: 'a',
+        frontmatter: { title: 'Note', date: '2026-01-01', tags: [], related: [] },
+        content: 'the theorem is theoretical',
+      },
+    ]);
+    const results = index.search('th');
+    expect(results).toHaveLength(0);
+  });
+
+  test('prefix matching: exact match still works for short terms', () => {
+    index.buildIndexWithContent([
+      {
+        slug: 'a',
+        frontmatter: { title: 'Go Language', date: '2026-01-01', tags: ['go'], related: [] },
+        content: 'Go is a compiled language.',
+      },
+    ]);
+    const results = index.search('go');
+    expect(results).toHaveLength(1);
+  });
+
+  test('excerpt includes context around prefix-matched term', () => {
+    index.buildIndexWithContent([
+      {
+        slug: 'a',
+        frontmatter: { title: 'Note', date: '2026-01-01', tags: [], related: [] },
+        content: 'The ThinkPad X1 Carbon is a great laptop for development work.',
+      },
+    ]);
+    const results = index.search('think');
+    expect(results).toHaveLength(1);
+    expect(results[0].excerpt.toLowerCase()).toContain('thinkpad');
+  });
+
+  test('issue #3 regression: finds ThinkPad note by indirect queries', () => {
+    index.buildIndexWithContent([
+      {
+        slug: 'hardware/thinkpad-x1-carbon',
+        frontmatter: {
+          title: 'Hardware — ThinkPad X1 Carbon (Arch Laptop)',
+          date: '2026-01-01',
+          tags: ['hardware', 'laptop', 'arch-linux'],
+          related: [],
+        },
+        content:
+          'Spec sheet and setup notes for the ThinkPad X1 Carbon running Arch Linux. ' +
+          'Todo: document BIOS settings and power management.',
+      },
+      {
+        slug: 'projects/startup/index',
+        frontmatter: { title: 'Startup Project', date: '2026-01-01', tags: ['project'], related: [] },
+        content: 'Unrelated startup content.',
+      },
+    ]);
+
+    // "ThinkPad" — direct title term
+    const r1 = index.search('ThinkPad');
+    expect(r1.length).toBeGreaterThanOrEqual(1);
+    expect(r1[0].slug).toBe('hardware/thinkpad-x1-carbon');
+
+    // "spec laptop todo" — indirect multi-field query
+    const r2 = index.search('spec laptop todo');
+    expect(r2.length).toBeGreaterThanOrEqual(1);
+    expect(r2[0].slug).toBe('hardware/thinkpad-x1-carbon');
+  });
+
   test('buildIndexWithContent indexes related slugs', () => {
     index.buildIndexWithContent([
       {
