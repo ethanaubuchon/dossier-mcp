@@ -1,14 +1,16 @@
-# library
+# library-mcp
 
-Personal knowledge management MCP server. Reads and writes notes in an Obsidian vault via the [Model Context Protocol](https://modelcontextprotocol.io).
+AI agents forget everything between sessions, and Claude's built-in memory is project-scoped. library-mcp gives your agent a persistent, cross-project memory: architectural decisions, ongoing priorities, and context that doesn't belong to any one project — stored as Markdown in a vault you can read and edit via the [Model Context Protocol](https://modelcontextprotocol.io).
 
 Built and tested with [Claude Code](https://claude.ai/code). Any MCP-compatible coding agent should work — the server uses standard stdio transport. Registration commands below are Claude Code-specific; other clients will have their own configuration method.
 
 ## Philosophy
 
-This tool is designed for **agent-as-author** use: Claude writes and maintains notes in your vault, building up a persistent cross-session memory that you can optionally inspect in Obsidian or any Markdown viewer.
+This tool is designed for **agent-as-author** use: Claude writes and maintains notes in your vault, building up a persistent cross-session and cross-project memory that you can optionally inspect in Obsidian or any Markdown viewer.
 
 This is the inverse of tools like Obsidian MCP, where the agent reads notes *you* wrote. Here, the agent is the primary author. You direct conversations, the agent captures context, decisions, and knowledge — and picks it all back up next session without you repeating yourself. The result is a lightweight RAG you didn't have to build: structured, searchable, human-readable, and maintained by the agent as a side effect of working with you.
+
+Context persists across sessions and projects — architectural decisions, ongoing priorities, research that doesn't belong to any one repo — all of it available in any new session without rebuilding from scratch.
 
 ## Setup
 
