@@ -198,15 +198,26 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
     { slug: z.string().describe('The slug of the note to delete') },
     async ({ slug }) => {
       if (!isValidSlug(slug)) return slugValidationError(slug);
-      const deleted = await noteStore.delete(slug);
+      let deleted;
+      try {
+        deleted = await noteStore.delete(slug);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return { isError: true, content: [{ type: 'text', text: `Failed to delete note "${slug}": ${msg}` }] };
+      }
       if (!deleted) {
         return {
           content: [{ type: 'text', text: `Note "${slug}" not found.` }],
           isError: true,
         };
       }
-      const allNotes = await noteStore.listWithContent();
-      searchIndex.buildIndexWithContent(allNotes);
+      try {
+        const allNotes = await noteStore.listWithContent();
+        searchIndex.buildIndexWithContent(allNotes);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error(`[library] Failed to rebuild search index after deleting "${slug}":`, msg);
+      }
       return {
         content: [{ type: 'text', text: `Deleted note "${slug}".` }],
       };
