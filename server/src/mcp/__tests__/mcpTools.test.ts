@@ -267,6 +267,15 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
         'profile.md not found — create it at the vault root.'
       );
     });
+
+    test('vaultContextHandler throws descriptive error for permission denied', async () => {
+      await fs.writeFile(path.join(dir, 'profile.md'), '# Vault');
+      await fs.chmod(path.join(dir, 'profile.md'), 0o000);
+      await expect(vaultContextHandler(dir)).rejects.toThrow(/permission|EACCES/i);
+      // Should NOT say "not found"
+      await expect(vaultContextHandler(dir)).rejects.not.toThrow('not found');
+      await fs.chmod(path.join(dir, 'profile.md'), 0o644);
+    });
   });
 
   describe('resolveFrontmatterParams', () => {

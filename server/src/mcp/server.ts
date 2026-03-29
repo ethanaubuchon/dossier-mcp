@@ -10,8 +10,12 @@ export async function vaultContextHandler(notesDir: string) {
   try {
     const raw = await fs.readFile(path.join(notesDir, 'profile.md'), 'utf-8');
     return { contents: [{ uri: 'vault://context', text: raw, mimeType: 'text/markdown' }] };
-  } catch {
-    throw new Error('profile.md not found — create it at the vault root.');
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new Error('profile.md not found — create it at the vault root.');
+    }
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new Error(`Failed to read profile.md: ${msg}`);
   }
 }
 
@@ -45,10 +49,17 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
       try {
         const raw = await fs.readFile(path.join(notesDir, 'profile.md'), 'utf-8');
         return { content: [{ type: 'text', text: raw }] };
-      } catch {
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
+          return {
+            isError: true,
+            content: [{ type: 'text', text: 'profile.md not found — create it at the vault root to use this tool.' }],
+          };
+        }
+        const msg = e instanceof Error ? e.message : String(e);
         return {
           isError: true,
-          content: [{ type: 'text', text: 'profile.md not found — create it at the vault root to use this tool.' }],
+          content: [{ type: 'text', text: `Failed to read profile.md: ${msg}` }],
         };
       }
     }
