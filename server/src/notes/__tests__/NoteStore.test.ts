@@ -189,6 +189,21 @@ describe('NoteStore', () => {
     expect(byContent.map((n) => n.slug)).toEqual(byList.map((n) => n.slug));
   });
 
+  test('list() handles unreadable subdirectory gracefully', async () => {
+    await store.upsert({ title: 'Root Note', content: 'OK.' });
+    const subdir = path.join(dir, 'locked-folder');
+    await fs.mkdir(subdir);
+    await fs.writeFile(path.join(subdir, 'note.md'), '---\ntitle: Locked\n---\nBody.');
+    await fs.chmod(subdir, 0o000);
+
+    // list() should still return the root note without throwing
+    const notes = await store.list();
+    expect(notes).toHaveLength(1);
+    expect(notes[0].frontmatter.title).toBe('Root Note');
+
+    await fs.chmod(subdir, 0o755); // cleanup
+  });
+
   describe('watcher', () => {
     const NOTE_FRONTMATTER = '---\ntitle: Note\ndate: 2026-01-01\ntags: []\nrelated: []\n---\n\nContent.';
 

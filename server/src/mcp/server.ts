@@ -72,7 +72,13 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
       path: z.string().optional().describe('Optional slug prefix to filter by (e.g. "projects/startup"). Trailing slash is normalized automatically.'),
     },
     async ({ path: prefix }) => {
-      const notes = await noteStore.list();
+      let notes;
+      try {
+        notes = await noteStore.list();
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return { isError: true, content: [{ type: 'text', text: `Failed to list notes: ${msg}` }] };
+      }
       const normalized = prefix && (prefix.endsWith('/') ? prefix : prefix + '/');
       const filtered = normalized ? notes.filter((n) => n.slug.startsWith(normalized)) : notes;
       return {
