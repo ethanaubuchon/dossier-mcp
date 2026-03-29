@@ -47,19 +47,13 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
     {},
     async () => {
       try {
-        const raw = await fs.readFile(path.join(notesDir, 'profile.md'), 'utf-8');
-        return { content: [{ type: 'text', text: raw }] };
+        const result = await vaultContextHandler(notesDir);
+        return { content: [{ type: 'text', text: result.contents[0].text }] };
       } catch (e) {
-        if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
-          return {
-            isError: true,
-            content: [{ type: 'text', text: 'profile.md not found — create it at the vault root to use this tool.' }],
-          };
-        }
         const msg = e instanceof Error ? e.message : String(e);
         return {
           isError: true,
-          content: [{ type: 'text', text: `Failed to read profile.md: ${msg}` }],
+          content: [{ type: 'text', text: msg }],
         };
       }
     }
@@ -267,15 +261,7 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
         notes = await noteStore.list();
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        return {
-          contents: [
-            {
-              uri: 'notes://index',
-              text: `# Knowledge Base Notes\n\nFailed to list notes: ${msg}`,
-              mimeType: 'text/markdown',
-            },
-          ],
-        };
+        throw new Error(`Failed to list notes: ${msg}`);
       }
       const lines = notes.map(
         (n) => `- [${n.frontmatter.title}](note://${encodeURIComponent(n.slug)}) — ${n.frontmatter.date} [${n.frontmatter.tags.join(', ')}]`
@@ -305,7 +291,8 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
       let notes;
       try {
         notes = await noteStore.list();
-      } catch {
+      } catch (e) {
+        console.error('[library] Failed to list note resources:', e instanceof Error ? e.message : e);
         return { resources: [] };
       }
       return {
