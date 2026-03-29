@@ -204,6 +204,66 @@ describe('NoteStore', () => {
     await fs.chmod(subdir, 0o755); // cleanup
   });
 
+  describe('empty directory cleanup on delete', () => {
+    test('delete removes empty parent directory', async () => {
+      await store.upsert({ slug: 'projects/orphan/deep-note', title: 'Deep Note', content: 'Body.' });
+      await store.delete('projects/orphan/deep-note');
+
+      // The 'orphan' directory should be removed since it's now empty
+      await expect(fs.access(path.join(dir, 'projects', 'orphan'))).rejects.toThrow();
+      // The 'projects' directory should also be removed since it's now empty
+      await expect(fs.access(path.join(dir, 'projects'))).rejects.toThrow();
+    });
+
+    test('delete preserves non-empty parent directories', async () => {
+      await store.upsert({ slug: 'projects/keep/note-a', title: 'Note A', content: 'A.' });
+      await store.upsert({ slug: 'projects/keep/note-b', title: 'Note B', content: 'B.' });
+      await store.delete('projects/keep/note-a');
+
+      // 'keep' directory still has note-b, should not be removed
+      await expect(fs.access(path.join(dir, 'projects', 'keep'))).resolves.toBeUndefined();
+    });
+
+    test('delete never removes the vault root', async () => {
+      await store.upsert({ slug: 'lonely-note', title: 'Lonely', content: 'Body.' });
+      await store.delete('lonely-note');
+
+      // Vault root must still exist
+      await expect(fs.access(dir)).resolves.toBeUndefined();
+    });
+
+    test('delete cleans up multiple levels of empty parents', async () => {
+      await store.upsert({ slug: 'a/b/c/deep', title: 'Deep', content: 'Body.' });
+      await store.delete('a/b/c/deep');
+
+      // All three levels (a/b/c, a/b, a) should be removed
+      await expect(fs.access(path.join(dir, 'a'))).rejects.toThrow();
+    });
+
+    test('delete stops cleanup at first non-empty ancestor', async () => {
+      await store.upsert({ slug: 'root/sibling', title: 'Sibling', content: 'Body.' });
+      await store.upsert({ slug: 'root/child/target', title: 'Target', content: 'Body.' });
+      await store.delete('root/child/target');
+
+      // 'child' should be removed (empty)
+      await expect(fs.access(path.join(dir, 'root', 'child'))).rejects.toThrow();
+      // 'root' should still exist (has sibling.md)
+      await expect(fs.access(path.join(dir, 'root'))).resolves.toBeUndefined();
+    });
+
+    test('delete still succeeds when directory cleanup fails', async () => {
+      await store.upsert({ slug: 'locked/child/note', title: 'Note', content: 'Body.' });
+      // Make the parent non-removable
+      await fs.chmod(path.join(dir, 'locked'), 0o555);
+
+      const deleted = await store.delete('locked/child/note');
+      expect(deleted).toBe(true);
+
+      // Cleanup: restore permissions so afterEach can rm
+      await fs.chmod(path.join(dir, 'locked'), 0o755);
+    });
+  });
+
   describe('watcher', () => {
     const NOTE_FRONTMATTER = '---\ntitle: Note\ndate: 2026-01-01\ntags: []\nrelated: []\n---\n\nContent.';
 
