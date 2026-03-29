@@ -137,6 +137,56 @@ describe('SearchIndex', () => {
     expect(scoreTen).toBeGreaterThan(scoreOnce);
   });
 
+  test('prefix matching: query "think" matches note containing "thinkpad"', () => {
+    index.buildIndexWithContent([
+      {
+        slug: 'laptop',
+        frontmatter: { title: 'Hardware — ThinkPad X1 Carbon', date: '2026-01-01', tags: ['hardware'], related: [] },
+        content: 'Arch Linux laptop setup notes.',
+      },
+    ]);
+    const results = index.search('think');
+    expect(results).toHaveLength(1);
+    expect(results[0].slug).toBe('laptop');
+  });
+
+  test('prefix matching: sums frequencies when prefix matches multiple terms', () => {
+    index.buildIndexWithContent([
+      {
+        slug: 'a',
+        frontmatter: { title: 'Note', date: '2026-01-01', tags: [], related: [] },
+        content: 'computer components computation',
+      },
+    ]);
+    const results = index.search('comp');
+    expect(results).toHaveLength(1);
+    expect(results[0].score).toBeGreaterThan(0);
+  });
+
+  test('prefix matching: minimum length 3 — two-char terms require exact match', () => {
+    index.buildIndexWithContent([
+      {
+        slug: 'a',
+        frontmatter: { title: 'Note', date: '2026-01-01', tags: [], related: [] },
+        content: 'the theorem is theoretical',
+      },
+    ]);
+    const results = index.search('th');
+    expect(results).toHaveLength(0);
+  });
+
+  test('prefix matching: exact match still works for short terms', () => {
+    index.buildIndexWithContent([
+      {
+        slug: 'a',
+        frontmatter: { title: 'Go Language', date: '2026-01-01', tags: ['go'], related: [] },
+        content: 'Go is a compiled language.',
+      },
+    ]);
+    const results = index.search('go');
+    expect(results).toHaveLength(1);
+  });
+
   test('buildIndexWithContent indexes related slugs', () => {
     index.buildIndexWithContent([
       {

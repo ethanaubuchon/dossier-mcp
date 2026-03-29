@@ -75,10 +75,10 @@ export class SearchIndex {
     for (const entry of this.entries) {
       let score = 0;
       for (const term of queryTerms) {
-        const tf = entry.terms.get(term) || 0;
+        const tf = this.getTermFrequency(entry, term);
         if (tf === 0) continue;
 
-        const n = this.docFreq.get(term) || 0;
+        const n = this.getDocFrequency(term);
         const idf = Math.log((this.docCount - n + 0.5) / (n + 0.5) + 1);
         const tfNorm =
           (tf * (BM25_K1 + 1)) /
@@ -96,6 +96,29 @@ export class SearchIndex {
     }
 
     return results.sort((a, b) => b.score - a.score).slice(0, limit);
+  }
+
+  private getTermFrequency(entry: IndexEntry, queryTerm: string): number {
+    const exact = entry.terms.get(queryTerm) || 0;
+    if (queryTerm.length < 3) return exact;
+
+    let prefixSum = 0;
+    for (const [indexedTerm, freq] of entry.terms) {
+      if (indexedTerm !== queryTerm && indexedTerm.startsWith(queryTerm)) {
+        prefixSum += freq;
+      }
+    }
+    return exact + prefixSum;
+  }
+
+  private getDocFrequency(queryTerm: string): number {
+    if (queryTerm.length < 3) return this.docFreq.get(queryTerm) || 0;
+
+    let count = 0;
+    for (const entry of this.entries) {
+      if (this.getTermFrequency(entry, queryTerm) > 0) count++;
+    }
+    return count;
   }
 
   private addWeightedTerms(terms: Map<string, number>, text: string, weight: number): number {
