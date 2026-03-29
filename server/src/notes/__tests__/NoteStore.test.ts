@@ -147,6 +147,40 @@ describe('NoteStore', () => {
     expect(beta.content).toContain('Beta body text.');
   });
 
+  test('list() logs skipped files to stderr', async () => {
+    await store.upsert({ title: 'Good Note', content: 'OK.' });
+    await fs.writeFile(path.join(dir, 'unreadable.md'), 'content');
+    await fs.chmod(path.join(dir, 'unreadable.md'), 0o000);
+
+    const stderrSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const notes = await store.list();
+    expect(notes).toHaveLength(1);
+    expect(notes[0].frontmatter.title).toBe('Good Note');
+    expect(stderrSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[library] Skipping unreadable note'),
+      expect.anything()
+    );
+    stderrSpy.mockRestore();
+    await fs.chmod(path.join(dir, 'unreadable.md'), 0o644);
+  });
+
+  test('listWithContent() logs skipped files to stderr', async () => {
+    await store.upsert({ title: 'Good Note', content: 'OK.' });
+    await fs.writeFile(path.join(dir, 'unreadable.md'), 'content');
+    await fs.chmod(path.join(dir, 'unreadable.md'), 0o000);
+
+    const stderrSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const notes = await store.listWithContent();
+    expect(notes).toHaveLength(1);
+    expect(notes[0].frontmatter.title).toBe('Good Note');
+    expect(stderrSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[library] Skipping unreadable note'),
+      expect.anything()
+    );
+    stderrSpy.mockRestore();
+    await fs.chmod(path.join(dir, 'unreadable.md'), 0o644);
+  });
+
   test('listWithContent preserves date-descending sort', async () => {
     await store.upsert({ title: 'One', content: 'one' });
     await store.upsert({ title: 'Two', content: 'two' });

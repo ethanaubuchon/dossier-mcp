@@ -105,7 +105,8 @@ export class NoteStore extends EventEmitter {
             slug,
             frontmatter: this.parseFrontmatter(parsed.data),
           } as NoteListItem;
-        } catch {
+        } catch (e) {
+          console.error(`[library] Skipping unreadable note "${slug}":`, e instanceof Error ? e.message : e);
           return null;
         }
       })
@@ -130,7 +131,8 @@ export class NoteStore extends EventEmitter {
             frontmatter: this.parseFrontmatter(parsed.data),
             content: parsed.content,
           };
-        } catch {
+        } catch (e) {
+          console.error(`[library] Skipping unreadable note "${slug}":`, e instanceof Error ? e.message : e);
           return null;
         }
       })
