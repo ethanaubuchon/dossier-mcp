@@ -67,6 +67,37 @@ describe('SearchIndex', () => {
     expect(typeof results[0].excerpt).toBe('string');
   });
 
+  test('field boosting: title match > tag match > related match > body match', () => {
+    index.buildIndexWithContent([
+      {
+        slug: 'title-hit',
+        frontmatter: { title: 'Kubernetes Guide', date: '2026-01-01', tags: [], related: [] },
+        content: 'A guide about containers.',
+      },
+      {
+        slug: 'tag-hit',
+        frontmatter: { title: 'Container Guide', date: '2026-01-01', tags: ['kubernetes'], related: [] },
+        content: 'A guide about containers.',
+      },
+      {
+        slug: 'related-hit',
+        frontmatter: { title: 'Container Guide', date: '2026-01-01', tags: [], related: ['kubernetes-overview'] },
+        content: 'A guide about containers.',
+      },
+      {
+        slug: 'body-hit',
+        frontmatter: { title: 'Container Guide', date: '2026-01-01', tags: [], related: [] },
+        content: 'Learn about kubernetes orchestration.',
+      },
+    ]);
+    const results = index.search('kubernetes');
+    expect(results.length).toBe(4);
+    expect(results[0].slug).toBe('title-hit');
+    expect(results[1].slug).toBe('tag-hit');
+    expect(results[2].slug).toBe('related-hit');
+    expect(results[3].slug).toBe('body-hit');
+  });
+
   test('buildIndexWithContent indexes related slugs', () => {
     index.buildIndexWithContent([
       {
