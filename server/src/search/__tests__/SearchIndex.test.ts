@@ -187,6 +187,19 @@ describe('SearchIndex', () => {
     expect(results).toHaveLength(1);
   });
 
+  test('excerpt includes context around prefix-matched term', () => {
+    index.buildIndexWithContent([
+      {
+        slug: 'a',
+        frontmatter: { title: 'Note', date: '2026-01-01', tags: [], related: [] },
+        content: 'The ThinkPad X1 Carbon is a great laptop for development work.',
+      },
+    ]);
+    const results = index.search('think');
+    expect(results).toHaveLength(1);
+    expect(results[0].excerpt.toLowerCase()).toContain('thinkpad');
+  });
+
   test('buildIndexWithContent indexes related slugs', () => {
     index.buildIndexWithContent([
       {
