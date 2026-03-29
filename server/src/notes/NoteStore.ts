@@ -211,6 +211,56 @@ export class NoteStore extends EventEmitter {
     };
   }
 
+  async move(oldSlug: string, newSlug: string): Promise<{ note: Note; updatedRefs: string[] }> {
+    // 1. Read source note
+    const source = await this.get(oldSlug);
+    if (!source) {
+      throw new Error(`Note "${oldSlug}" not found`);
+    }
+
+    // 2. Check target doesn't exist
+    const existing = await this.get(newSlug);
+    if (existing) {
+      throw new Error(`Note already exists at "${newSlug}"`);
+    }
+
+    // 3. Write to new location (preserving all frontmatter)
+    const newPath = this.notePath(newSlug);
+    await fs.mkdir(path.dirname(newPath), { recursive: true });
+    await fs.writeFile(newPath, source.raw);
+
+    // 4. Delete old file and prune empty parents
+    const oldPath = this.notePath(oldSlug);
+    await fs.unlink(oldPath);
+    await this.pruneEmptyParents(oldPath);
+
+    // 5. Update references in other notes
+    const updatedRefs = await this.updateRelatedRefs(oldSlug, newSlug);
+
+    // 6. Return note at new location
+    const note = await this.get(newSlug);
+    return { note: note!, updatedRefs };
+  }
+
+  private async updateRelatedRefs(oldSlug: string, newSlug: string): Promise<string[]> {
+    const updatedSlugs: string[] = [];
+    const allNotes = await this.listWithContent();
+    for (const entry of allNotes) {
+      if (entry.frontmatter.related.includes(oldSlug)) {
+        const newRelated = entry.frontmatter.related.map((r) => (r === oldSlug ? newSlug : r));
+        await this.upsert({
+          slug: entry.slug,
+          title: entry.frontmatter.title,
+          content: entry.content,
+          tags: entry.frontmatter.tags,
+          related: newRelated,
+        });
+        updatedSlugs.push(entry.slug);
+      }
+    }
+    return updatedSlugs;
+  }
+
   async delete(slug: string): Promise<boolean> {
     const filePath = this.notePath(slug);
     try {

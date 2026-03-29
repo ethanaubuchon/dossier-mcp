@@ -264,6 +264,53 @@ describe('NoteStore', () => {
     });
   });
 
+  describe('move', () => {
+    test('move relocates note to new slug', async () => {
+      await store.upsert({ slug: 'inbox/draft', title: 'Draft', content: 'Body.', tags: ['test'], related: ['other/note'] });
+      const result = await store.move('inbox/draft', 'projects/final');
+
+      // Old slug gone
+      expect(await store.get('inbox/draft')).toBeNull();
+      // New slug exists with preserved frontmatter
+      expect(result.note.slug).toBe('projects/final');
+      expect(result.note.frontmatter.title).toBe('Draft');
+      expect(result.note.frontmatter.tags).toEqual(['test']);
+      expect(result.note.frontmatter.related).toEqual(['other/note']);
+      expect(result.note.content.trim()).toBe('Body.');
+    });
+
+    test('move preserves original creation date', async () => {
+      await store.upsert({ slug: 'old-note', title: 'Old', content: 'Body.' });
+      const original = await store.get('old-note');
+      const result = await store.move('old-note', 'new-note');
+      expect(result.note.frontmatter.date).toBe(original!.frontmatter.date);
+    });
+
+    test('move creates intermediate directories', async () => {
+      await store.upsert({ slug: 'flat-note', title: 'Flat', content: 'Body.' });
+      const result = await store.move('flat-note', 'deep/nested/path/note');
+      expect(result.note.slug).toBe('deep/nested/path/note');
+      expect(await store.get('deep/nested/path/note')).not.toBeNull();
+    });
+
+    test('move prunes empty parents at old location', async () => {
+      await store.upsert({ slug: 'lonely/dir/note', title: 'Note', content: 'Body.' });
+      await store.move('lonely/dir/note', 'somewhere-else');
+      // Both 'lonely/dir' and 'lonely' should be removed
+      await expect(fs.access(path.join(dir, 'lonely'))).rejects.toThrow();
+    });
+
+    test('move throws when source does not exist', async () => {
+      await expect(store.move('nonexistent', 'target')).rejects.toThrow('not found');
+    });
+
+    test('move throws when target already exists', async () => {
+      await store.upsert({ slug: 'source', title: 'Source', content: 'A.' });
+      await store.upsert({ slug: 'target', title: 'Target', content: 'B.' });
+      await expect(store.move('source', 'target')).rejects.toThrow('already exists');
+    });
+  });
+
   describe('watcher', () => {
     const NOTE_FRONTMATTER = '---\ntitle: Note\ndate: 2026-01-01\ntags: []\nrelated: []\n---\n\nContent.';
 
