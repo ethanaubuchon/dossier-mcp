@@ -212,12 +212,26 @@ export class NoteStore extends EventEmitter {
   }
 
   async delete(slug: string): Promise<boolean> {
+    const filePath = this.notePath(slug);
     try {
-      await fs.unlink(this.notePath(slug));
-      return true;
+      await fs.unlink(filePath);
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === 'ENOENT') return false;
       throw e;
+    }
+    await this.pruneEmptyParents(filePath);
+    return true;
+  }
+
+  private async pruneEmptyParents(filePath: string): Promise<void> {
+    let current = path.dirname(filePath);
+    while (current !== this.notesDir && current.startsWith(this.notesDir)) {
+      try {
+        await fs.rmdir(current);
+      } catch {
+        break; // Directory not empty or other error — stop climbing
+      }
+      current = path.dirname(current);
     }
   }
 
