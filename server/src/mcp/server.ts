@@ -145,9 +145,15 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
       if (!resolved.ok) {
         return { isError: true, content: [{ type: 'text', text: resolved.error }] };
       }
-      const note = await noteStore.upsert({ slug, title: resolved.title, content: resolved.content, tags: resolved.tags, related: resolved.related });
-      const allNotes = await noteStore.listWithContent();
-      searchIndex.buildIndexWithContent(allNotes);
+      let note;
+      try {
+        note = await noteStore.upsert({ slug, title: resolved.title, content: resolved.content, tags: resolved.tags, related: resolved.related });
+        const allNotes = await noteStore.listWithContent();
+        searchIndex.buildIndexWithContent(allNotes);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return { isError: true, content: [{ type: 'text', text: `Failed to write note "${slug}": ${msg}` }] };
+      }
       return {
         content: [{ type: 'text', text: `Updated note "${note.frontmatter.title}" (slug: "${note.slug}").` }],
       };

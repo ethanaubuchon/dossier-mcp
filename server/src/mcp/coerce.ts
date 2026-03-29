@@ -26,7 +26,7 @@ export function resolveFrontmatterParams(params: {
     parsed = matter(params.content);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return { ok: false, error: `Invalid YAML frontmatter: ${msg}` };
+    return { ok: false, error: `Failed to parse note content: ${msg}` };
   }
 
   const hasFrontmatter = Object.keys(parsed.data).length > 0;
@@ -34,6 +34,9 @@ export function resolveFrontmatterParams(params: {
   const rawTitle = params.title ?? (hasFrontmatter ? parsed.data.title : undefined);
   const title = typeof rawTitle === 'string' ? rawTitle : undefined;
   if (!title) {
+    if (hasFrontmatter) {
+      return { ok: false, error: 'title is required — frontmatter was detected in content but no title field was found. Pass title as a separate param or add a title field to the frontmatter.' };
+    }
     return { ok: false, error: 'title is required — pass it as a separate param or include it in frontmatter' };
   }
 

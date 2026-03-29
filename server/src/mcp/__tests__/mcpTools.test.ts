@@ -302,7 +302,7 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
     test('returns error when title is absent and frontmatter has no title', () => {
       const content = '---\ntags:\n  - foo\n---\nBody text.';
       const result = resolveFrontmatterParams({ title: undefined, content, tags: undefined, related: undefined });
-      expect(result).toMatchObject({ ok: false, error: expect.stringContaining('title') });
+      expect(result).toMatchObject({ ok: false, error: expect.stringMatching(/frontmatter was detected/i) });
     });
 
     test('returns error when title is absent and content has no frontmatter', () => {
@@ -316,10 +316,10 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
       expect(result).toMatchObject({ ok: true, content: 'Actual body here.' });
     });
 
-    test('returns error with YAML details when content has malformed frontmatter', () => {
+    test('returns error with parse details when content has malformed frontmatter', () => {
       const content = '---\ntitle: foo: bar: baz\ntags: [unclosed\n---\nBody.';
       const result = resolveFrontmatterParams({ title: undefined, content, tags: undefined, related: undefined });
-      expect(result).toMatchObject({ ok: false, error: expect.stringMatching(/yaml/i) });
+      expect(result).toMatchObject({ ok: false, error: expect.stringMatching(/failed to parse/i) });
     });
 
     test('explicit related overrides frontmatter related', () => {
@@ -331,6 +331,22 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
     test('returns error when title is empty string', () => {
       const result = resolveFrontmatterParams({ title: '', content: 'Body.', tags: undefined, related: undefined });
       expect(result).toMatchObject({ ok: false, error: expect.stringContaining('title') });
+    });
+
+    test('returns error when frontmatter title is a number (e.g. title: 2024)', () => {
+      const content = '---\ntitle: 2024\ntags:\n  - year\n---\nBody.';
+      const result = resolveFrontmatterParams({ title: undefined, content, tags: undefined, related: undefined });
+      expect(result).toMatchObject({ ok: false, error: expect.stringContaining('title') });
+    });
+
+    test('update_note handler pattern: resolveFrontmatterParams error propagates as isError response', () => {
+      // Simulates the handler's error routing: if (!resolved.ok) return { isError: true, ... }
+      const resolved = resolveFrontmatterParams({ title: undefined, content: '---\ntags:\n  - foo\n---\nBody.', tags: undefined, related: undefined });
+      expect(resolved.ok).toBe(false);
+      if (!resolved.ok) {
+        const handlerResponse = { isError: true as const, content: [{ type: 'text' as const, text: resolved.error }] };
+        expect(handlerResponse).toMatchObject({ isError: true, content: [{ type: 'text', text: expect.stringContaining('title') }] });
+      }
     });
 
     test('round-trip: get_note raw output can be passed back to resolveFrontmatterParams', async () => {
