@@ -412,11 +412,14 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
       expect(result.note.content.trim()).toBe('Keep this.');
     });
 
-    test('move_note rejects same source and target slug', () => {
-      // This is a handler-level check, test the validation logic
-      const isSameSlug = (a: string, b: string) => a === b;
-      expect(isSameSlug('foo', 'foo')).toBe(true);
-      expect(isSameSlug('foo', 'bar')).toBe(false);
+    test('move_note rejects when source does not exist', async () => {
+      await expect(noteStore.move('nonexistent', 'target')).rejects.toThrow('not found');
+    });
+
+    test('move_note rejects when target exists without force', async () => {
+      await noteStore.upsert({ slug: 'src', title: 'Src', content: 'A.' });
+      await noteStore.upsert({ slug: 'dst', title: 'Dst', content: 'B.' });
+      await expect(noteStore.move('src', 'dst')).rejects.toThrow('already exists');
     });
   });
 
