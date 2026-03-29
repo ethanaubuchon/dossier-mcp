@@ -54,6 +54,18 @@ describe('NoteStore', () => {
     expect(note).toBeNull();
   });
 
+  test('get() throws on malformed frontmatter (not ENOENT)', async () => {
+    await fs.writeFile(path.join(dir, 'bad-note.md'), '---\ntitle: foo: bar: baz\ntags: [unclosed\n---\nBody.');
+    await expect(store.get('bad-note')).rejects.toThrow();
+  });
+
+  test('get() throws on permission error (not ENOENT)', async () => {
+    await fs.writeFile(path.join(dir, 'locked.md'), '---\ntitle: Locked\n---\nBody.');
+    await fs.chmod(path.join(dir, 'locked.md'), 0o000);
+    await expect(store.get('locked')).rejects.toThrow();
+    await fs.chmod(path.join(dir, 'locked.md'), 0o644); // cleanup for afterEach rm
+  });
+
   test('upsert merges with existing note preserving date', async () => {
     await store.upsert({ title: 'My Note', content: 'v1' });
     const first = await store.get('my-note');
@@ -135,12 +147,61 @@ describe('NoteStore', () => {
     expect(beta.content).toContain('Beta body text.');
   });
 
+  test('list() logs skipped files to stderr', async () => {
+    await store.upsert({ title: 'Good Note', content: 'OK.' });
+    await fs.writeFile(path.join(dir, 'unreadable.md'), 'content');
+    await fs.chmod(path.join(dir, 'unreadable.md'), 0o000);
+
+    const stderrSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const notes = await store.list();
+    expect(notes).toHaveLength(1);
+    expect(notes[0].frontmatter.title).toBe('Good Note');
+    expect(stderrSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[library] Skipping unreadable note'),
+      expect.anything()
+    );
+    stderrSpy.mockRestore();
+    await fs.chmod(path.join(dir, 'unreadable.md'), 0o644);
+  });
+
+  test('listWithContent() logs skipped files to stderr', async () => {
+    await store.upsert({ title: 'Good Note', content: 'OK.' });
+    await fs.writeFile(path.join(dir, 'unreadable.md'), 'content');
+    await fs.chmod(path.join(dir, 'unreadable.md'), 0o000);
+
+    const stderrSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const notes = await store.listWithContent();
+    expect(notes).toHaveLength(1);
+    expect(notes[0].frontmatter.title).toBe('Good Note');
+    expect(stderrSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[library] Skipping unreadable note'),
+      expect.anything()
+    );
+    stderrSpy.mockRestore();
+    await fs.chmod(path.join(dir, 'unreadable.md'), 0o644);
+  });
+
   test('listWithContent preserves date-descending sort', async () => {
     await store.upsert({ title: 'One', content: 'one' });
     await store.upsert({ title: 'Two', content: 'two' });
     const byContent = await store.listWithContent();
     const byList = await store.list();
     expect(byContent.map((n) => n.slug)).toEqual(byList.map((n) => n.slug));
+  });
+
+  test('list() handles unreadable subdirectory gracefully', async () => {
+    await store.upsert({ title: 'Root Note', content: 'OK.' });
+    const subdir = path.join(dir, 'locked-folder');
+    await fs.mkdir(subdir);
+    await fs.writeFile(path.join(subdir, 'note.md'), '---\ntitle: Locked\n---\nBody.');
+    await fs.chmod(subdir, 0o000);
+
+    // list() should still return the root note without throwing
+    const notes = await store.list();
+    expect(notes).toHaveLength(1);
+    expect(notes[0].frontmatter.title).toBe('Root Note');
+
+    await fs.chmod(subdir, 0o755); // cleanup
   });
 
   describe('watcher', () => {

@@ -10,8 +10,12 @@ export async function vaultContextHandler(notesDir: string) {
   try {
     const raw = await fs.readFile(path.join(notesDir, 'profile.md'), 'utf-8');
     return { contents: [{ uri: 'vault://context', text: raw, mimeType: 'text/markdown' }] };
-  } catch {
-    throw new Error('profile.md not found — create it at the vault root.');
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new Error('profile.md not found — create it at the vault root.');
+    }
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new Error(`Failed to read profile.md: ${msg}`);
   }
 }
 
@@ -43,12 +47,13 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
     {},
     async () => {
       try {
-        const raw = await fs.readFile(path.join(notesDir, 'profile.md'), 'utf-8');
-        return { content: [{ type: 'text', text: raw }] };
-      } catch {
+        const result = await vaultContextHandler(notesDir);
+        return { content: [{ type: 'text', text: result.contents[0].text }] };
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
         return {
           isError: true,
-          content: [{ type: 'text', text: 'profile.md not found — create it at the vault root to use this tool.' }],
+          content: [{ type: 'text', text: msg }],
         };
       }
     }
@@ -61,7 +66,13 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
       path: z.string().optional().describe('Optional slug prefix to filter by (e.g. "projects/startup"). Trailing slash is normalized automatically.'),
     },
     async ({ path: prefix }) => {
-      const notes = await noteStore.list();
+      let notes;
+      try {
+        notes = await noteStore.list();
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return { isError: true, content: [{ type: 'text', text: `Failed to list notes: ${msg}` }] };
+      }
       const normalized = prefix && (prefix.endsWith('/') ? prefix : prefix + '/');
       const filtered = normalized ? notes.filter((n) => n.slug.startsWith(normalized)) : notes;
       return {
@@ -76,7 +87,16 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
     { slug: z.string().describe('The note slug (e.g. "react-hooks-rules")') },
     async ({ slug }) => {
       if (!isValidSlug(slug)) return slugValidationError(slug);
-      const note = await noteStore.get(slug);
+      let note;
+      try {
+        note = await noteStore.get(slug);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Failed to read note "${slug}": ${msg}` }],
+        };
+      }
       if (!note) {
         return {
           content: [{ type: 'text', text: `Note "${slug}" not found.` }],
@@ -103,16 +123,15 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
       const slug = notePath ?? ('inbox/' + NoteStore.makeSlug(title));
       if (!isValidSlug(slug)) return slugValidationError(slug);
 
-      const existing = await noteStore.get(slug);
-      if (existing) {
-        return {
-          isError: true,
-          content: [{ type: 'text', text: `Note already exists at "${slug}" — use update_note to modify it.` }],
-        };
-      }
-
       let note;
       try {
+        const existing = await noteStore.get(slug);
+        if (existing) {
+          return {
+            isError: true,
+            content: [{ type: 'text', text: `Note already exists at "${slug}" — use update_note to modify it.` }],
+          };
+        }
         note = await noteStore.upsert({ slug, title, content, tags, related });
         const allNotes = await noteStore.listWithContent();
         searchIndex.buildIndexWithContent(allNotes);
@@ -140,19 +159,19 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
     },
     async ({ slug, title, content, tags, related }) => {
       if (!isValidSlug(slug)) return slugValidationError(slug);
-      const existing = await noteStore.get(slug);
-      if (!existing) {
-        return {
-          content: [{ type: 'text', text: `Note "${slug}" not found.` }],
-          isError: true,
-        };
-      }
-      const resolved = resolveFrontmatterParams({ title, content, tags, related });
-      if (!resolved.ok) {
-        return { isError: true, content: [{ type: 'text', text: resolved.error }] };
-      }
       let note;
       try {
+        const existing = await noteStore.get(slug);
+        if (!existing) {
+          return {
+            content: [{ type: 'text', text: `Note "${slug}" not found.` }],
+            isError: true,
+          };
+        }
+        const resolved = resolveFrontmatterParams({ title, content, tags, related });
+        if (!resolved.ok) {
+          return { isError: true, content: [{ type: 'text', text: resolved.error }] };
+        }
         note = await noteStore.upsert({ slug, title: resolved.title, content: resolved.content, tags: resolved.tags, related: resolved.related });
         const allNotes = await noteStore.listWithContent();
         searchIndex.buildIndexWithContent(allNotes);
@@ -172,15 +191,26 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
     { slug: z.string().describe('The slug of the note to delete') },
     async ({ slug }) => {
       if (!isValidSlug(slug)) return slugValidationError(slug);
-      const deleted = await noteStore.delete(slug);
+      let deleted;
+      try {
+        deleted = await noteStore.delete(slug);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return { isError: true, content: [{ type: 'text', text: `Failed to delete note "${slug}": ${msg}` }] };
+      }
       if (!deleted) {
         return {
           content: [{ type: 'text', text: `Note "${slug}" not found.` }],
           isError: true,
         };
       }
-      const allNotes = await noteStore.listWithContent();
-      searchIndex.buildIndexWithContent(allNotes);
+      try {
+        const allNotes = await noteStore.listWithContent();
+        searchIndex.buildIndexWithContent(allNotes);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error(`[library] Failed to rebuild search index after deleting "${slug}":`, msg);
+      }
       return {
         content: [{ type: 'text', text: `Deleted note "${slug}".` }],
       };
@@ -195,7 +225,13 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
       limit: z.number().optional().describe('Maximum number of results to return (default: 10)'),
     },
     async ({ query, limit }) => {
-      const results = searchIndex.search(query, limit ?? 10);
+      let results;
+      try {
+        results = searchIndex.search(query, limit ?? 10);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return { isError: true, content: [{ type: 'text', text: `Search failed: ${msg}` }] };
+      }
       if (results.length === 0) {
         return {
           content: [{ type: 'text', text: `No notes found matching "${query}".` }],
@@ -220,7 +256,13 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
     'notes://index',
     { description: 'Index of all notes in the knowledge base' },
     async () => {
-      const notes = await noteStore.list();
+      let notes;
+      try {
+        notes = await noteStore.list();
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        throw new Error(`Failed to list notes: ${msg}`);
+      }
       const lines = notes.map(
         (n) => `- [${n.frontmatter.title}](note://${encodeURIComponent(n.slug)}) — ${n.frontmatter.date} [${n.frontmatter.tags.join(', ')}]`
       );
@@ -246,7 +288,13 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
   // Individual note resources via template
   const noteTemplate = new ResourceTemplate('note://{slug}', {
     list: async () => {
-      const notes = await noteStore.list();
+      let notes;
+      try {
+        notes = await noteStore.list();
+      } catch (e) {
+        console.error('[library] Failed to list note resources:', e instanceof Error ? e.message : e);
+        return { resources: [] };
+      }
       return {
         resources: notes.map((n) => ({
           uri: `note://${encodeURIComponent(n.slug)}`,
@@ -263,7 +311,13 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
     noteTemplate,
     { description: 'A single note from the knowledge base, identified by its slug' },
     async (uri, { slug }) => {
-      const note = await noteStore.get(decodeURIComponent(slug as string));
+      let note;
+      try {
+        note = await noteStore.get(decodeURIComponent(slug as string));
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        throw new Error(`Failed to read note "${slug}": ${msg}`);
+      }
       if (!note) {
         throw new Error(`Note "${slug}" not found`);
       }
