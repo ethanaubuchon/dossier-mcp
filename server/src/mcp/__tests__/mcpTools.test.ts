@@ -12,7 +12,7 @@ import { z } from 'zod';
 import { NoteStore } from '../../notes/NoteStore.js';
 import { SearchIndex } from '../../search/SearchIndex.js';
 import type { NoteListItem } from '../../types.js';
-import { coerceStringArray } from '../coerce.js';
+import { coerceStringArray, resolveFrontmatterParams } from '../coerce.js';
 import { vaultContextHandler } from '../server.js';
 
 async function makeTmpDir(): Promise<string> {
@@ -266,6 +266,54 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
       await expect(vaultContextHandler(dir)).rejects.toThrow(
         'profile.md not found — create it at the vault root.'
       );
+    });
+  });
+
+  describe('resolveFrontmatterParams', () => {
+    test('returns provided title and content unchanged when no frontmatter in content', () => {
+      const result = resolveFrontmatterParams({ title: 'My Note', content: 'Body text.', tags: undefined, related: undefined });
+      expect(result).toEqual({ ok: true, title: 'My Note', content: 'Body text.', tags: undefined, related: undefined });
+    });
+
+    test('extracts title from frontmatter when title param is absent', () => {
+      const content = '---\ntitle: Extracted Title\n---\nBody text.';
+      const result = resolveFrontmatterParams({ title: undefined, content, tags: undefined, related: undefined });
+      expect(result).toEqual({ ok: true, title: 'Extracted Title', content: 'Body text.', tags: undefined, related: undefined });
+    });
+
+    test('extracts tags and related from frontmatter along with title', () => {
+      const content = '---\ntitle: Full Note\ntags:\n  - foo\n  - bar\nrelated:\n  - other/note\n---\nBody text.';
+      const result = resolveFrontmatterParams({ title: undefined, content, tags: undefined, related: undefined });
+      expect(result).toEqual({ ok: true, title: 'Full Note', content: 'Body text.', tags: ['foo', 'bar'], related: ['other/note'] });
+    });
+
+    test('explicit title overrides frontmatter title', () => {
+      const content = '---\ntitle: Frontmatter Title\ntags:\n  - foo\n---\nBody text.';
+      const result = resolveFrontmatterParams({ title: 'Explicit Title', content, tags: undefined, related: undefined });
+      expect(result).toEqual({ ok: true, title: 'Explicit Title', content: 'Body text.', tags: ['foo'], related: undefined });
+    });
+
+    test('explicit tags override frontmatter tags', () => {
+      const content = '---\ntitle: Note\ntags:\n  - from-frontmatter\n---\nBody.';
+      const result = resolveFrontmatterParams({ title: undefined, content, tags: ['explicit-tag'], related: undefined });
+      expect(result).toEqual({ ok: true, title: 'Note', content: 'Body.', tags: ['explicit-tag'], related: undefined });
+    });
+
+    test('returns error when title is absent and frontmatter has no title', () => {
+      const content = '---\ntags:\n  - foo\n---\nBody text.';
+      const result = resolveFrontmatterParams({ title: undefined, content, tags: undefined, related: undefined });
+      expect(result).toMatchObject({ ok: false, error: expect.stringContaining('title') });
+    });
+
+    test('returns error when title is absent and content has no frontmatter', () => {
+      const result = resolveFrontmatterParams({ title: undefined, content: 'Just body text.', tags: undefined, related: undefined });
+      expect(result).toMatchObject({ ok: false, error: expect.stringContaining('title') });
+    });
+
+    test('strips frontmatter from content body when frontmatter is present', () => {
+      const content = '---\ntitle: My Note\n---\n\nActual body here.';
+      const result = resolveFrontmatterParams({ title: undefined, content, tags: undefined, related: undefined });
+      expect(result).toMatchObject({ ok: true, content: expect.not.stringContaining('---') });
     });
   });
 

@@ -4,7 +4,7 @@ import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mc
 import { z } from 'zod';
 import { NoteStore } from '../notes/NoteStore.js';
 import { SearchIndex } from '../search/SearchIndex.js';
-import { coerceStringArray } from './coerce.js';
+import { coerceStringArray, resolveFrontmatterParams } from './coerce.js';
 
 export async function vaultContextHandler(notesDir: string) {
   try {
@@ -122,11 +122,13 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
 
   server.tool(
     'update_note',
-    'Update an existing note. Pass the slug to identify which note to update.',
+    'Update an existing note. Pass the slug to identify which note to update. ' +
+    'title, tags, and related can be passed as separate params or embedded as frontmatter in content — ' +
+    'useful when passing back output from get_note directly. Explicit params take precedence over frontmatter values.',
     {
       slug: z.string().describe('The slug of the note to update'),
-      title: z.string().describe('New title for the note'),
-      content: z.string().describe('New markdown content for the note body'),
+      title: z.string().optional().describe('New title for the note. Can also be supplied via frontmatter in content.'),
+      content: z.string().describe('New markdown content for the note body (frontmatter will be extracted if present)'),
       tags: z.preprocess(coerceStringArray, z.array(z.string()).optional()).describe('Updated tags'),
       related: z.preprocess(coerceStringArray, z.array(z.string()).optional()).describe('Updated related note slugs'),
     },
@@ -139,7 +141,11 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
           isError: true,
         };
       }
-      const note = await noteStore.upsert({ slug, title, content, tags, related });
+      const resolved = resolveFrontmatterParams({ title, content, tags, related });
+      if (!resolved.ok) {
+        return { isError: true, content: [{ type: 'text', text: resolved.error }] };
+      }
+      const note = await noteStore.upsert({ slug, ...resolved });
       const allNotes = await noteStore.listWithContent();
       searchIndex.buildIndexWithContent(allNotes);
       return {
