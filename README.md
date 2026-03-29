@@ -1,14 +1,20 @@
-# library
+# library-mcp
 
-Personal knowledge management MCP server. Reads and writes notes in an Obsidian vault via the [Model Context Protocol](https://modelcontextprotocol.io).
+Persistent, agent-managed context for Claude Code. Gives your AI agent structured memory it maintains itself — stored as Markdown in an Obsidian-compatible vault via the [Model Context Protocol](https://modelcontextprotocol.io).
 
 Built and tested with [Claude Code](https://claude.ai/code). Any MCP-compatible coding agent should work — the server uses standard stdio transport. Registration commands below are Claude Code-specific; other clients will have their own configuration method.
 
+## Concept
+
+AI agents forget everything between sessions. Claude memory is project scoped. LibraryMCP gives your gives your agent a structured memory for context that needs to come with you across these boundries and a home for context that might not fit into one specific project.  The MCP links and indexes notes to only pull in context you ask about as needed and stores them in a single vault compatible with Obsidian, allowing you to easily review and edit the contents at any time.
+
 ## Philosophy
 
-This tool is designed for **agent-as-author** use: Claude writes and maintains notes in your vault, building up a persistent cross-session memory that you can optionally inspect in Obsidian or any Markdown viewer.
+This tool is designed for **agent-as-author** use: Claude writes and maintains notes in your vault, building up a persistent cross-session and cross-project memory that you can optionally inspect in Obsidian or any Markdown viewer.
 
 This is the inverse of tools like Obsidian MCP, where the agent reads notes *you* wrote. Here, the agent is the primary author. You direct conversations, the agent captures context, decisions, and knowledge — and picks it all back up next session without you repeating yourself. The result is a lightweight RAG you didn't have to build: structured, searchable, human-readable, and maintained by the agent as a side effect of working with you.
+
+Architectural decisions, ongoing priorities, and working context that would otherwise be rebuilt from scratch, can be loaded into any new session by asking your agent to search for notes about them.  Context can be recorded for other projects without needing to break from your current session by simply writing or updating a note.  Sometimes research and exploration with an agent can produce context that doesn't fit in a project.  This can be the home for that context.
 
 ## Setup
 
