@@ -380,6 +380,49 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
     });
   });
 
+  describe('move_note', () => {
+    test('move_note relocates note and updates references', async () => {
+      await noteStore.upsert({ slug: 'old-slug', title: 'Moving', content: 'Body.' });
+      await noteStore.upsert({ slug: 'referrer', title: 'Ref', content: 'Body.', related: ['old-slug'] });
+
+      const result = await noteStore.move('old-slug', 'new-slug');
+      // Rebuild search index (what handler would do)
+      const allNotes = await noteStore.listWithContent();
+      searchIndex.buildIndexWithContent(allNotes);
+
+      expect(result.note.slug).toBe('new-slug');
+      expect(result.updatedRefs).toEqual(['referrer']);
+
+      // Verify search index was updated
+      const searchResults = searchIndex.search('Moving');
+      expect(searchResults).toHaveLength(1);
+      expect(searchResults[0].slug).toBe('new-slug');
+    });
+
+    test('move_note with force overwrites existing target', async () => {
+      await noteStore.upsert({ slug: 'source', title: 'Source', content: 'Keep this.' });
+      await noteStore.upsert({ slug: 'target', title: 'Target', content: 'Overwrite this.' });
+
+      // Simulate force: delete target first, then move
+      await noteStore.delete('target');
+      const result = await noteStore.move('source', 'target');
+
+      expect(result.note.slug).toBe('target');
+      expect(result.note.frontmatter.title).toBe('Source');
+      expect(result.note.content.trim()).toBe('Keep this.');
+    });
+
+    test('move_note rejects when source does not exist', async () => {
+      await expect(noteStore.move('nonexistent', 'target')).rejects.toThrow('not found');
+    });
+
+    test('move_note rejects when target exists without force', async () => {
+      await noteStore.upsert({ slug: 'src', title: 'Src', content: 'A.' });
+      await noteStore.upsert({ slug: 'dst', title: 'Dst', content: 'B.' });
+      await expect(noteStore.move('src', 'dst')).rejects.toThrow('already exists');
+    });
+  });
+
   describe('coerceStringArray', () => {
     test('passes through an existing array unchanged', () => {
       expect(coerceStringArray(['tag1', 'tag2'])).toEqual(['tag1', 'tag2']);
