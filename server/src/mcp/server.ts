@@ -257,13 +257,12 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
     'move_note',
     'Move a note to a new location in the vault. Preserves all metadata (title, date, tags, related) ' +
     'and automatically updates related fields in other notes that reference the old slug. ' +
-    'Use force to overwrite an existing note at the target location.',
+    'Fails if a note already exists at the target slug — delete it first if you intend to replace.',
     {
       slug: z.string().describe('The current slug of the note to move'),
       new_slug: z.string().describe('The target slug to move the note to'),
-      force: z.boolean().optional().describe('If true, overwrite an existing note at the target slug (default: false)'),
     },
-    async ({ slug, new_slug, force }) => {
+    async ({ slug, new_slug }) => {
       if (!isValidSlug(slug)) return slugValidationError(slug);
       if (!isValidSlug(new_slug)) return slugValidationError(new_slug);
       if (slug === new_slug) {
@@ -271,19 +270,7 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
       }
 
       try {
-        if (!force) {
-          const existing = await noteStore.get(new_slug);
-          if (existing) {
-            return {
-              isError: true,
-              content: [{ type: 'text', text: `Note already exists at "${new_slug}" — pass force: true to overwrite, or choose a different slug.` }],
-            };
-          }
-        } else {
-          await noteStore.delete(new_slug);
-        }
-
-        const { note, updatedRefs } = await noteStore.move(slug, new_slug);
+        const { updatedRefs } = await noteStore.move(slug, new_slug);
         const allNotes = await noteStore.listWithContent();
         searchIndex.buildIndexWithContent(allNotes);
 
@@ -294,6 +281,13 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
         return { content: [{ type: 'text', text: msg }] };
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
+        // Surface the "already exists" case with user-friendly guidance.
+        if (msg.startsWith(`Note already exists at "${new_slug}"`)) {
+          return {
+            isError: true,
+            content: [{ type: 'text', text: `Note already exists at "${new_slug}" — choose a different slug.` }],
+          };
+        }
         return { isError: true, content: [{ type: 'text', text: `Failed to move note "${slug}": ${msg}` }] };
       }
     }
