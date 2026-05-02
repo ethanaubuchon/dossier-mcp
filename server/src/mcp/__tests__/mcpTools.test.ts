@@ -665,5 +665,31 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
       const stored = await noteStore.get('replace-tags');
       expect(stored!.frontmatter.tags).toEqual(['new']);
     });
+
+    test('explicit tags: [] + frontmatter tags: [non-empty] — frontmatter wins (documents precedence)', async () => {
+      // After the empty-array → undefined coercion, an explicit `tags: []` no
+      // longer beats frontmatter tags. This is a deliberate trade-off: the
+      // ambiguity of `tags: []` (does it mean "clear" or "didn't change"?) is
+      // resolved by trusting whatever the body's frontmatter explicitly states.
+      // Prior to the fix, explicit `[]` would have wiped both existing tags and
+      // the frontmatter tags. PR #30's "explicit params take precedence" still
+      // holds for non-empty explicit values.
+      await noteStore.upsert({ slug: 'precedence-note', title: 'Precedence', content: 'Old body.', tags: ['existing'] });
+
+      const tags = tagsSchema.parse([]); // explicit empty → coerced to undefined
+      const related = relatedSchema.parse(undefined);
+      expect(tags).toBeUndefined();
+
+      const fmContent = '---\ntitle: Precedence\ntags:\n  - fm-tag\n---\nNew body.';
+      const resolved = resolveFrontmatterParams({ title: undefined, content: fmContent, tags, related });
+      expect(resolved.ok).toBe(true);
+      if (!resolved.ok) return;
+      // Frontmatter tags win because the explicit param coerced to undefined.
+      expect(resolved.tags).toEqual(['fm-tag']);
+
+      await noteStore.upsert({ slug: 'precedence-note', title: resolved.title, content: resolved.content, tags: resolved.tags, related: resolved.related });
+      const stored = await noteStore.get('precedence-note');
+      expect(stored!.frontmatter.tags).toEqual(['fm-tag']);
+    });
   });
 });
