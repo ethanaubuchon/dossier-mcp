@@ -264,6 +264,73 @@ describe('NoteStore', () => {
     });
   });
 
+  describe('slug validation', () => {
+    test('get() throws on path traversal slug', async () => {
+      await expect(store.get('../../etc/passwd')).rejects.toThrow(/Invalid slug/);
+    });
+
+    test('upsert() throws on path traversal slug', async () => {
+      await expect(
+        store.upsert({ slug: '../escape', title: 'x', content: 'y' })
+      ).rejects.toThrow(/Invalid slug/);
+    });
+
+    test('move() throws when target slug escapes the vault', async () => {
+      await store.upsert({ slug: 'valid-slug', title: 'Valid', content: 'Body.' });
+      await expect(store.move('valid-slug', '../escape')).rejects.toThrow(/Invalid slug/);
+    });
+
+    test('move() throws when source slug is invalid', async () => {
+      await expect(store.move('../escape', 'somewhere')).rejects.toThrow(/Invalid slug/);
+    });
+
+    test('delete() throws on slug containing null byte', async () => {
+      await expect(store.delete('valid\x00slug')).rejects.toThrow(/Invalid slug/);
+    });
+
+    test('get() throws on empty slug', async () => {
+      await expect(store.get('')).rejects.toThrow(/Invalid slug/);
+    });
+
+    test('upsert() throws on slug with leading slash', async () => {
+      await expect(
+        store.upsert({ slug: '/absolute', title: 'x', content: 'y' })
+      ).rejects.toThrow(/Invalid slug/);
+    });
+
+    test('upsert() throws on slug with trailing slash', async () => {
+      await expect(
+        store.upsert({ slug: 'foo/', title: 'x', content: 'y' })
+      ).rejects.toThrow(/Invalid slug/);
+    });
+
+    test('subdirectory slug "projects/foo" is still allowed (positive)', async () => {
+      const note = await store.upsert({ slug: 'projects/foo', title: 'Foo', content: 'Body.' });
+      expect(note.slug).toBe('projects/foo');
+      const fetched = await store.get('projects/foo');
+      expect(fetched).not.toBeNull();
+      expect(fetched!.frontmatter.title).toBe('Foo');
+    });
+
+    test('boundary holds when NoteStore is instantiated with a relative path', async () => {
+      // Build a relative path that points to the same temp dir as `dir` (already absolute).
+      const relDir = path.relative(process.cwd(), dir);
+      const relStore = new NoteStore(relDir);
+      try {
+        await relStore.initialize();
+        // Normal operations still work.
+        const note = await relStore.upsert({ slug: 'rel-note', title: 'Rel', content: 'Body.' });
+        expect(note.slug).toBe('rel-note');
+        const fetched = await relStore.get('rel-note');
+        expect(fetched).not.toBeNull();
+        // Boundary still rejects traversal even with a relative starting point.
+        await expect(relStore.get('../../etc/passwd')).rejects.toThrow(/Invalid slug/);
+      } finally {
+        await relStore.close();
+      }
+    });
+  });
+
   describe('move', () => {
     test('move relocates note to new slug', async () => {
       await store.upsert({ slug: 'inbox/draft', title: 'Draft', content: 'Body.', tags: ['test'], related: ['other/note'] });

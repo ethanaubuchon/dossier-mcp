@@ -20,13 +20,17 @@ export async function vaultContextHandler(notesDir: string) {
 }
 
 function isValidSlug(slug: string): boolean {
-  return !slug.includes('..') && !slug.startsWith('/');
+  if (slug.length === 0) return false;
+  if (slug.includes('\0')) return false;
+  if (slug.startsWith('/') || slug.endsWith('/')) return false;
+  if (slug.includes('..')) return false;
+  return true;
 }
 
 function slugValidationError(slug: string) {
   return {
     isError: true as const,
-    content: [{ type: 'text' as const, text: `Invalid slug "${slug}": must be a relative path without ..` }],
+    content: [{ type: 'text' as const, text: `Invalid slug "${slug}": must be a non-empty relative path without "..", null bytes, or leading/trailing "/"` }],
   };
 }
 

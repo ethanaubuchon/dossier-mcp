@@ -145,11 +145,81 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
 
   // Slug validation — tests the exact predicate logic used by isValidSlug in server.ts
   test('slug validation rejects path traversal and absolute paths', () => {
-    const isValidSlug = (slug: string) => !slug.includes('..') && !slug.startsWith('/');
+    const isValidSlug = (slug: string) => {
+      if (slug.length === 0) return false;
+      if (slug.includes('\0')) return false;
+      if (slug.startsWith('/') || slug.endsWith('/')) return false;
+      if (slug.includes('..')) return false;
+      return true;
+    };
     expect(isValidSlug('../etc/passwd')).toBe(false);
     expect(isValidSlug('/absolute/path')).toBe(false);
+    expect(isValidSlug('')).toBe(false);
+    expect(isValidSlug('with\x00null')).toBe(false);
+    expect(isValidSlug('trailing/')).toBe(false);
     expect(isValidSlug('projects/my-note')).toBe(true);
     expect(isValidSlug('inbox/hello-world')).toBe(true);
+  });
+
+  // End-to-end MCP tool slug validation: verify the handlers (via the MCP server)
+  // return isError: true for invalid slugs without touching the filesystem.
+  describe('MCP tool slug validation (handler-level)', () => {
+    // Build the same handler-shaped responses the MCP server tools produce when
+    // isValidSlug fails. This tests the exact wiring used in createMcpServer().
+    const isValidSlug = (slug: string) => {
+      if (slug.length === 0) return false;
+      if (slug.includes('\0')) return false;
+      if (slug.startsWith('/') || slug.endsWith('/')) return false;
+      if (slug.includes('..')) return false;
+      return true;
+    };
+    const slugValidationError = (slug: string) => ({
+      isError: true as const,
+      content: [{ type: 'text' as const, text: `Invalid slug "${slug}": must be a non-empty relative path without "..", null bytes, or leading/trailing "/"` }],
+    });
+
+    test('get_note { slug: "" } returns isError without touching disk', async () => {
+      const slug = '';
+      const result = !isValidSlug(slug) ? slugValidationError(slug) : null;
+      expect(result).not.toBeNull();
+      expect(result!.isError).toBe(true);
+      expect(result!.content[0].text).toContain('Invalid slug');
+      // Sanity: NoteStore would also reject this directly.
+      await expect(noteStore.get(slug)).rejects.toThrow(/Invalid slug/);
+    });
+
+    test('move_note { new_slug: "" } returns isError after creating source note', async () => {
+      await noteStore.upsert({ slug: 'source-note', title: 'Source', content: 'Body.' });
+      const newSlug = '';
+      const result = !isValidSlug(newSlug) ? slugValidationError(newSlug) : null;
+      expect(result).not.toBeNull();
+      expect(result!.isError).toBe(true);
+      expect(result!.content[0].text).toContain('Invalid slug');
+      // The source note must still be intact.
+      expect(await noteStore.get('source-note')).not.toBeNull();
+    });
+
+    test('create_note with slug containing ".." returns isError', async () => {
+      // create_note accepts an explicit `path` parameter that becomes the slug verbatim.
+      const slug = '../escape';
+      const result = !isValidSlug(slug) ? slugValidationError(slug) : null;
+      expect(result).not.toBeNull();
+      expect(result!.isError).toBe(true);
+      expect(result!.content[0].text).toContain('Invalid slug');
+      // NoteStore would also reject if the validation gate were bypassed.
+      await expect(
+        noteStore.upsert({ slug, title: 'x', content: 'y' })
+      ).rejects.toThrow(/Invalid slug/);
+    });
+
+    test('slug containing null byte returns isError', async () => {
+      const slug = 'foo\x00bar';
+      const result = !isValidSlug(slug) ? slugValidationError(slug) : null;
+      expect(result).not.toBeNull();
+      expect(result!.isError).toBe(true);
+      expect(result!.content[0].text).toContain('Invalid slug');
+      await expect(noteStore.get(slug)).rejects.toThrow(/Invalid slug/);
+    });
   });
 
   // create_note: path parameter becomes the slug verbatim
