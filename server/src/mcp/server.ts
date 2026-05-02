@@ -19,7 +19,7 @@ export async function vaultContextHandler(notesDir: string) {
   }
 }
 
-function isValidSlug(slug: string): boolean {
+export function isValidSlug(slug: string): boolean {
   if (slug.length === 0) return false;
   if (slug.includes('\0')) return false;
   if (slug.startsWith('/') || slug.endsWith('/')) return false;
@@ -27,7 +27,7 @@ function isValidSlug(slug: string): boolean {
   return true;
 }
 
-function slugValidationError(slug: string) {
+export function slugValidationError(slug: string) {
   return {
     isError: true as const,
     content: [{ type: 'text' as const, text: `Invalid slug "${slug}": must be a non-empty relative path without "..", null bytes, or leading/trailing "/"` }],
@@ -361,15 +361,19 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
     noteTemplate,
     { description: 'A single note from the knowledge base, identified by its slug' },
     async (uri, { slug }) => {
+      const decodedSlug = decodeURIComponent(slug as string);
+      if (!isValidSlug(decodedSlug)) {
+        throw new Error(`Invalid slug "${decodedSlug}": must be a non-empty relative path without "..", null bytes, or leading/trailing "/"`);
+      }
       let note;
       try {
-        note = await noteStore.get(decodeURIComponent(slug as string));
+        note = await noteStore.get(decodedSlug);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        throw new Error(`Failed to read note "${slug}": ${msg}`);
+        throw new Error(`Failed to read note "${decodedSlug}": ${msg}`);
       }
       if (!note) {
-        throw new Error(`Note "${slug}" not found`);
+        throw new Error(`Note "${decodedSlug}" not found`);
       }
       return {
         contents: [
