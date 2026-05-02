@@ -377,6 +377,19 @@ describe('NoteStore', () => {
       await expect(store.move('source', 'target')).rejects.toThrow('already exists');
     });
 
+    test('move throws a clear error when source and target slugs match', async () => {
+      // Defense-in-depth: without the early guard, this would fail at the wx
+      // open step with a misleading "already exists" error.
+      await store.upsert({ slug: 'same-slug', title: 'Same', content: 'Body.' });
+      await expect(store.move('same-slug', 'same-slug')).rejects.toThrow(
+        /Source and target slugs are the same/
+      );
+      // Source must remain intact.
+      const stored = await store.get('same-slug');
+      expect(stored).not.toBeNull();
+      expect(stored!.frontmatter.title).toBe('Same');
+    });
+
     test('move updates related fields in other notes that reference old slug', async () => {
       await store.upsert({ slug: 'target-note', title: 'Target', content: 'Body.' });
       await store.upsert({ slug: 'referrer-a', title: 'A', content: 'Body.', related: ['target-note', 'other'] });

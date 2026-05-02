@@ -239,6 +239,14 @@ export class NoteStore extends EventEmitter {
   }
 
   async move(oldSlug: string, newSlug: string): Promise<{ note: Note; updatedRefs: string[] }> {
+    // Defense-in-depth: same-slug move would otherwise fail at step 3 with a
+    // misleading "already exists" error (the source's own file is still on
+    // disk). Reject explicitly so callers see the real cause. The MCP handler
+    // already guards this upstream; this protects any direct caller.
+    if (oldSlug === newSlug) {
+      throw new Error(`Source and target slugs are the same: "${oldSlug}"`);
+    }
+
     // 1. Read source note
     const source = await this.get(oldSlug);
     if (!source) {
@@ -250,6 +258,12 @@ export class NoteStore extends EventEmitter {
     //    stringify with gray-matter ONLY in this case so the verbatim raw
     //    content path (preserving the user's exact YAML) holds for the common
     //    case where there's no self-reference.
+    //
+    //    Trade-off: matter.stringify serializes frontmatter in JS object
+    //    property order, which may differ from the user's hand-edited field
+    //    order. Acceptable because (a) the rewrite path only fires for self-
+    //    referencing notes, (b) the alternative is leaving a dangling related
+    //    entry pointing at a deleted slug.
     const oldPath = this.notePath(oldSlug);
     const newPath = this.notePath(newSlug);
     let content: string;
@@ -267,6 +281,12 @@ export class NoteStore extends EventEmitter {
     //    if the file already exists, closing the TOCTOU window between an
     //    existence check and a write. The try/finally ensures we close the
     //    handle even if the write throws.
+    //
+    //    Known small gap: if writeFile succeeds but close() throws (extremely
+    //    rare on local filesystems — kernel has already buffered the data),
+    //    the exception bypasses step 4 and the vault is left with a duplicate
+    //    note rather than a clean rollback. Worst case is duplication, not
+    //    data loss; not worth the structural complexity to handle.
     await fs.mkdir(path.dirname(newPath), { recursive: true });
     let fileHandle: fs.FileHandle;
     try {
