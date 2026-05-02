@@ -608,11 +608,53 @@ describe('NoteStore', () => {
       expect(tmps).toEqual([]);
     });
 
-    test('chokidar emits at most one coalesced change for a single upsert', async () => {
+    test('move succeeds even if tmp cleanup unlink fails after successful link', async () => {
+      // Regression guard: previously, a failed unlink of the tmp file (after
+      // link to target had already succeeded) propagated as an error, which
+      // triggered move()'s rollback and silently destroyed the just-linked
+      // target. The fix makes the post-link tmp cleanup best-effort.
+      await store.upsert({ slug: 'src', title: 'Src', content: 'Body.' });
+
+      const realUnlink = fs.unlink.bind(fs);
+      const unlinkSpy = jest.spyOn(fs, 'unlink').mockImplementation(async (p) => {
+        // Fail unlink only for the tmp path; let other unlinks (source removal
+        // at move step 4, test cleanup, etc.) work normally.
+        if (typeof p === 'string' && p.includes('.tmp.')) {
+          throw Object.assign(new Error('EPERM: simulated tmp-cleanup failure'), { code: 'EPERM' });
+        }
+        return realUnlink(p as Parameters<typeof realUnlink>[0]);
+      });
+
+      try {
+        // Move must succeed: the link to target succeeded, so the operation
+        // is logically complete even if the tmp cleanup couldn't run.
+        await store.move('src', 'dst');
+
+        const target = await store.get('dst');
+        expect(target).not.toBeNull();
+        expect(target!.content.trim()).toBe('Body.');
+        await expect(fs.access(path.join(dir, 'src.md'))).rejects.toThrow();
+        // Tmp file may linger (the unlink we simulated failing) — harmless
+        // since walkMdFiles filters by .md extension, but verify it isn't
+        // visible to listing.
+        const listed = await store.list();
+        expect(listed.map((n) => n.slug)).toContain('dst');
+        expect(listed.map((n) => n.slug)).not.toContain('src');
+      } finally {
+        unlinkSpy.mockRestore();
+        // Manual cleanup of any lingering tmp file we couldn't unlink during
+        // the test (real unlink works once the spy is restored).
+        const remaining = await findTmpFiles(dir);
+        await Promise.all(remaining.map((p) => realUnlink(p).catch(() => {})));
+      }
+    });
+
+    test('chokidar emits exactly one coalesced change for a single upsert', async () => {
       // The atomic-write tmp lifecycle (writeFile + rename, ms-scale) must NOT
       // trigger separate watcher events. awaitWriteFinish's stability window
-      // is what keeps the watcher quiet during the brief tmp lifecycle —
-      // verifying that here.
+      // is what keeps the watcher quiet during the brief tmp lifecycle. Asserting
+      // exactly 1 (not <= 1) — a 0 result would be indistinguishable from a
+      // silently-broken watcher.
       let changeCount = 0;
       store.on('change', () => { changeCount++; });
 
@@ -621,7 +663,7 @@ describe('NoteStore', () => {
       // awaitWriteFinish stability (500ms) + debounce (300ms) + slack for CI.
       await new Promise((resolve) => setTimeout(resolve, 1200));
 
-      expect(changeCount).toBeLessThanOrEqual(1);
+      expect(changeCount).toBe(1);
     }, 5000);
   });
 

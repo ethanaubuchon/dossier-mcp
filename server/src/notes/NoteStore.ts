@@ -287,12 +287,17 @@ export class NoteStore extends EventEmitter {
         throw e;
       }
       // Hardlink succeeded — drop the tmp reference, leaving the target as
-      // the sole link to the inode.
-      await fs.unlink(tmpPath);
+      // the sole link to the inode. Guard the cleanup: if it fails (extremely
+      // rare, e.g. EPERM on an exotic filesystem), the write itself logically
+      // succeeded — the target inode is in place. Re-throwing here would
+      // trigger move()'s rollback, which would unlink the just-linked target
+      // and silently destroy the user's data. Best-effort cleanup, then return.
+      await fs.unlink(tmpPath).catch(() => {});
+      return;
     } catch (e) {
-      // Best-effort cleanup. In the overwrite-success path we already returned,
-      // so this only runs on failure. After a successful rename the tmp is
-      // gone, so the unlink would ENOENT — the .catch swallows that.
+      // Best-effort cleanup. Only reached on failure of writeFile / rename /
+      // link. After a successful rename the tmp is already gone (we returned
+      // above); after a successful link we returned above too.
       await fs.unlink(tmpPath).catch(() => {});
       throw e;
     }
