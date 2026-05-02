@@ -449,6 +449,18 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
       }
     });
 
+    test('frontmatter tags: [] is normalized to undefined (preserve-existing semantics)', () => {
+      // Paranoia check: confirms the empty-array→undefined fix from coerceStringArray
+      // propagates through resolveFrontmatterParams when frontmatter contains `tags: []`.
+      const result = resolveFrontmatterParams({
+        title: undefined,
+        content: '---\ntitle: Foo\ntags: []\n---\nBody.',
+        tags: undefined,
+        related: undefined,
+      });
+      expect(result).toMatchObject({ ok: true, title: 'Foo', tags: undefined });
+    });
+
     test('round-trip: get_note raw output can be passed back to resolveFrontmatterParams', async () => {
       await noteStore.upsert({ slug: 'inbox/round-trip-note', title: 'Round Trip Note', content: 'Round trip body.', tags: ['rt'] });
       const note = await noteStore.get('inbox/round-trip-note');
@@ -533,6 +545,125 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
 
     test('trims whitespace from comma-separated values', () => {
       expect(coerceStringArray('  tag1 ,  tag2  ')).toEqual(['tag1', 'tag2']);
+    });
+
+    // Empty-array → undefined: protects the update_note round-trip pattern from
+    // accidentally wiping existing tags/related when an LLM emits `tags: []`.
+    test('returns undefined for an empty array (preserve-existing semantics)', () => {
+      expect(coerceStringArray([])).toBeUndefined();
+    });
+
+    test('returns undefined for a JSON-encoded empty array string', () => {
+      expect(coerceStringArray('[]')).toBeUndefined();
+    });
+
+    test('preserves a non-empty array (sanity — fix does not affect non-empty input)', () => {
+      expect(coerceStringArray(['a'])).toEqual(['a']);
+    });
+
+    test('still splits a comma-separated string (sanity — fix does not affect comma path)', () => {
+      expect(coerceStringArray('a, b')).toEqual(['a', 'b']);
+    });
+  });
+
+  describe('update_note empty-array preserve-existing semantics', () => {
+    // These tests simulate the exact handler flow from server.ts:
+    //   coerceStringArray (via z.preprocess) → resolveFrontmatterParams → noteStore.upsert
+    // ensuring that an LLM passing `tags: []` or `related: []` doesn't wipe existing values.
+    const tagsSchema = z.preprocess(coerceStringArray, z.array(z.string()).optional());
+    const relatedSchema = z.preprocess(coerceStringArray, z.array(z.string()).optional());
+
+    test('update_note { tags: [] } preserves existing tags on the stored note', async () => {
+      // Setup: create a note with tags
+      await noteStore.upsert({ slug: 'has-tags', title: 'Has Tags', content: 'Body.', tags: ['a', 'b'] });
+
+      // Simulate handler: schema preprocesses [] → undefined
+      const tagsInput: unknown = [];
+      const tags = tagsSchema.parse(tagsInput);
+      const related = relatedSchema.parse(undefined);
+      expect(tags).toBeUndefined();
+
+      const resolved = resolveFrontmatterParams({ title: 'Has Tags', content: 'Body.', tags, related });
+      expect(resolved.ok).toBe(true);
+      if (!resolved.ok) return;
+
+      await noteStore.upsert({ slug: 'has-tags', title: resolved.title, content: resolved.content, tags: resolved.tags, related: resolved.related });
+      const stored = await noteStore.get('has-tags');
+      expect(stored).not.toBeNull();
+      expect(stored!.frontmatter.tags).toEqual(['a', 'b']);
+    });
+
+    test('update_note { related: [] } preserves existing related on the stored note', async () => {
+      await noteStore.upsert({ slug: 'has-related', title: 'Has Related', content: 'Body.', related: ['other/note'] });
+
+      const tags = tagsSchema.parse(undefined);
+      const related = relatedSchema.parse([]);
+      expect(related).toBeUndefined();
+
+      const resolved = resolveFrontmatterParams({ title: 'Has Related', content: 'Body.', tags, related });
+      expect(resolved.ok).toBe(true);
+      if (!resolved.ok) return;
+
+      await noteStore.upsert({ slug: 'has-related', title: resolved.title, content: resolved.content, tags: resolved.tags, related: resolved.related });
+      const stored = await noteStore.get('has-related');
+      expect(stored).not.toBeNull();
+      expect(stored!.frontmatter.related).toEqual(['other/note']);
+    });
+
+    test('update_note round-trip via frontmatter with tags: [] preserves existing tags', async () => {
+      await noteStore.upsert({ slug: 'rt-note', title: 'Round Trip', content: 'Body.', tags: ['keep', 'these'] });
+
+      // Simulate an LLM passing back content with frontmatter that has empty tags.
+      // (e.g. it serialized the modified note but stripped the tag values.)
+      const roundTripContent = '---\ntitle: Round Trip\ntags: []\nrelated: []\n---\nUpdated body.';
+      const tags = tagsSchema.parse(undefined);
+      const related = relatedSchema.parse(undefined);
+
+      const resolved = resolveFrontmatterParams({ title: undefined, content: roundTripContent, tags, related });
+      expect(resolved.ok).toBe(true);
+      if (!resolved.ok) return;
+      // The fix's payoff: empty arrays in frontmatter become undefined, so upsert preserves.
+      expect(resolved.tags).toBeUndefined();
+      expect(resolved.related).toBeUndefined();
+
+      await noteStore.upsert({ slug: 'rt-note', title: resolved.title, content: resolved.content, tags: resolved.tags, related: resolved.related });
+      const stored = await noteStore.get('rt-note');
+      expect(stored).not.toBeNull();
+      expect(stored!.frontmatter.tags).toEqual(['keep', 'these']);
+      expect(stored!.content.trim()).toBe('Updated body.');
+    });
+
+    test('create_note with tags: [] still produces a note with empty tags (no regression)', async () => {
+      // For create, [] semantically means "no tags" — a brand-new note has no
+      // existing tags to preserve, so the note should land with tags: [].
+      // Path: schema → undefined → noteStore.upsert sees data.tags=undefined,
+      // existing=null, so frontmatter.tags falls back to [].
+      const tagsInput: unknown = [];
+      const tags = tagsSchema.parse(tagsInput);
+      expect(tags).toBeUndefined();
+
+      const note = await noteStore.upsert({ slug: 'fresh-note', title: 'Fresh', content: 'New body.', tags });
+      expect(note.frontmatter.tags).toEqual([]);
+
+      const stored = await noteStore.get('fresh-note');
+      expect(stored).not.toBeNull();
+      expect(stored!.frontmatter.tags).toEqual([]);
+    });
+
+    test('update_note { tags: ["new"] } against existing ["old"] still replaces tags (sanity)', async () => {
+      await noteStore.upsert({ slug: 'replace-tags', title: 'Replace', content: 'Body.', tags: ['old'] });
+
+      const tags = tagsSchema.parse(['new']);
+      const related = relatedSchema.parse(undefined);
+      expect(tags).toEqual(['new']);
+
+      const resolved = resolveFrontmatterParams({ title: 'Replace', content: 'Body.', tags, related });
+      expect(resolved.ok).toBe(true);
+      if (!resolved.ok) return;
+
+      await noteStore.upsert({ slug: 'replace-tags', title: resolved.title, content: resolved.content, tags: resolved.tags, related: resolved.related });
+      const stored = await noteStore.get('replace-tags');
+      expect(stored!.frontmatter.tags).toEqual(['new']);
     });
   });
 });

@@ -153,7 +153,8 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
     'update_note',
     'Update an existing note. Pass the slug to identify which note to update. ' +
     'title, tags, and related can be passed as separate params or embedded as frontmatter in content — ' +
-    'useful when passing back output from get_note directly. Explicit params take precedence over frontmatter values.',
+    'useful when passing back output from get_note directly. Explicit params take precedence over frontmatter values. ' +
+    'Omit tags or related (or pass an empty array) to preserve existing values; pass a non-empty array to replace them.',
     {
       slug: z.string().describe('The slug of the note to update'),
       title: z.string().optional().describe('New title for the note. Can also be supplied via frontmatter in content.'),

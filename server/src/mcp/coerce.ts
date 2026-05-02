@@ -56,16 +56,25 @@ export function resolveFrontmatterParams(params: {
  * - A single bare string: 'tag1'
  * - An already-correct array: ['tag1', 'tag2']
  * - A JSON-encoded non-array (e.g. '42', '{"a":1}'): treated as a plain string, comma-split
+ * - An empty array (`[]` or `'[]'`): coerced to `undefined` so downstream callers
+ *   treat it as "preserve existing" rather than "clear all". This guards the
+ *   round-trip pattern (get_note → modify → update_note) where LLMs often emit
+ *   `tags: []` to mean "I didn't change tags."
  */
 export function coerceStringArray(val: unknown): string[] | undefined {
   if (val === undefined || val === null) return undefined;
-  if (Array.isArray(val)) return val.map(String);
+  // Empty arrays are treated as "preserve existing" rather than "clear all".
+  // This protects the round-trip pattern (get_note → modify → update_note) where
+  // LLM clients commonly emit `tags: []` to mean "I didn't change tags." If
+  // explicit clearing is ever needed, add an explicit sentinel (e.g. a dedicated
+  // flag) rather than overloading the empty-array meaning.
+  if (Array.isArray(val)) return val.length === 0 ? undefined : val.map(String);
   if (typeof val === 'string') {
     const trimmed = val.trim();
     if (trimmed === '') return undefined;
     try {
       const parsed = JSON.parse(trimmed);
-      if (Array.isArray(parsed)) return parsed.map(String);
+      if (Array.isArray(parsed)) return parsed.length === 0 ? undefined : parsed.map(String);
     } catch {
       // not JSON — fall through to comma split
     }
