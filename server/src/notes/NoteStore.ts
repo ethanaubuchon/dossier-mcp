@@ -245,26 +245,64 @@ export class NoteStore extends EventEmitter {
       throw new Error(`Note "${oldSlug}" not found`);
     }
 
-    // 2. Check target doesn't exist
-    const existing = await this.get(newSlug);
-    if (existing) {
-      throw new Error(`Note already exists at "${newSlug}"`);
+    // 2. Self-ref preflight: if the source's own related[] references its old
+    //    slug, rewrite that one entry to the new slug before writing. We re-
+    //    stringify with gray-matter ONLY in this case so the verbatim raw
+    //    content path (preserving the user's exact YAML) holds for the common
+    //    case where there's no self-reference.
+    const oldPath = this.notePath(oldSlug);
+    const newPath = this.notePath(newSlug);
+    let content: string;
+    if (source.frontmatter.related.includes(oldSlug)) {
+      const newFrontmatter: NoteFrontmatter = {
+        ...source.frontmatter,
+        related: source.frontmatter.related.map((r) => (r === oldSlug ? newSlug : r)),
+      };
+      content = matter.stringify(source.content, newFrontmatter as unknown as Record<string, unknown>);
+    } else {
+      content = source.raw;
     }
 
-    // 3. Write to new location (preserving all frontmatter)
-    const newPath = this.notePath(newSlug);
+    // 3. Atomic create-or-fail at the target. The 'wx' flag fails with EEXIST
+    //    if the file already exists, closing the TOCTOU window between an
+    //    existence check and a write. The try/finally ensures we close the
+    //    handle even if the write throws.
     await fs.mkdir(path.dirname(newPath), { recursive: true });
-    await fs.writeFile(newPath, source.raw);
+    let fileHandle: fs.FileHandle;
+    try {
+      fileHandle = await fs.open(newPath, 'wx');
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'EEXIST') {
+        throw new Error(`Note already exists at "${newSlug}"`);
+      }
+      throw e;
+    }
+    try {
+      await fileHandle.writeFile(content);
+    } finally {
+      await fileHandle.close();
+    }
 
-    // 4. Delete old file and prune empty parents
-    const oldPath = this.notePath(oldSlug);
-    await fs.unlink(oldPath);
+    // 4. Unlink old file. If this fails, roll back the new-location write so
+    //    the pre-move state is restored exactly. The rollback is safe because
+    //    step 3 used 'wx' — the file at newPath was a brand new file we just
+    //    created, so deleting it cannot clobber pre-existing data.
+    try {
+      await fs.unlink(oldPath);
+    } catch (e) {
+      await fs.unlink(newPath).catch(() => {});
+      throw e;
+    }
+
+    // 5. Prune empty parents at the old location.
     await this.pruneEmptyParents(oldPath);
 
-    // 5. Update references in other notes
+    // 6. Update references in other notes. The moved note's own self-ref was
+    //    already handled in step 2, so updateRelatedRefs's `entry.slug ===
+    //    newSlug` skip-guard is correct here.
     const updatedRefs = await this.updateRelatedRefs(oldSlug, newSlug);
 
-    // 6. Return note at new location
+    // 7. Return note at new location
     const note = await this.get(newSlug);
     return { note: note!, updatedRefs };
   }

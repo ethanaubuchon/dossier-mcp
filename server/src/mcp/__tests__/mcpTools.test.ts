@@ -494,24 +494,11 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
       expect(searchResults[0].slug).toBe('new-slug');
     });
 
-    test('move_note with force overwrites existing target', async () => {
-      await noteStore.upsert({ slug: 'source', title: 'Source', content: 'Keep this.' });
-      await noteStore.upsert({ slug: 'target', title: 'Target', content: 'Overwrite this.' });
-
-      // Simulate force: delete target first, then move
-      await noteStore.delete('target');
-      const result = await noteStore.move('source', 'target');
-
-      expect(result.note.slug).toBe('target');
-      expect(result.note.frontmatter.title).toBe('Source');
-      expect(result.note.content.trim()).toBe('Keep this.');
-    });
-
     test('move_note rejects when source does not exist', async () => {
       await expect(noteStore.move('nonexistent', 'target')).rejects.toThrow('not found');
     });
 
-    test('move_note rejects when target exists without force', async () => {
+    test('move_note rejects when target already exists', async () => {
       await noteStore.upsert({ slug: 'src', title: 'Src', content: 'A.' });
       await noteStore.upsert({ slug: 'dst', title: 'Dst', content: 'B.' });
       await expect(noteStore.move('src', 'dst')).rejects.toThrow('already exists');

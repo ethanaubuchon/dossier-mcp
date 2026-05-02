@@ -407,6 +407,75 @@ describe('NoteStore', () => {
       const result = await store.move('lonely', 'still-lonely');
       expect(result.updatedRefs).toEqual([]);
     });
+
+    test('move rewrites self-reference in moved note\'s related[]', async () => {
+      // The moved note's own related[] referenced its old slug. After the move,
+      // that entry should point to the new slug (not the now-stale old slug).
+      await store.upsert({
+        slug: 'old-slug',
+        title: 'Self Ref',
+        content: 'Body.',
+        related: ['old-slug', 'other-slug'],
+      });
+
+      const result = await store.move('old-slug', 'new-slug');
+
+      expect(result.note.frontmatter.related).toEqual(['new-slug', 'other-slug']);
+      // Read from disk to confirm persistence (not just the in-memory return).
+      const persisted = await store.get('new-slug');
+      expect(persisted!.frontmatter.related).toEqual(['new-slug', 'other-slug']);
+    });
+
+    test('move preserves other frontmatter fields when rewriting self-reference', async () => {
+      // Self-ref rewrite path uses matter.stringify; ensure other fields survive.
+      await store.upsert({
+        slug: 'old-slug',
+        title: 'Self Ref',
+        content: 'Body.',
+        tags: ['a'],
+        related: ['old-slug'],
+      });
+
+      const result = await store.move('old-slug', 'new-slug');
+
+      expect(result.note.frontmatter.title).toBe('Self Ref');
+      expect(result.note.frontmatter.tags).toEqual(['a']);
+      expect(result.note.frontmatter.related).toEqual(['new-slug']);
+    });
+
+    test('move rolls back the new file when source unlink fails', async () => {
+      // Simulate a partial-failure mid-move: target write succeeds, source
+      // unlink throws. The post-condition must restore the pre-move state —
+      // source intact, target absent.
+      await store.upsert({ slug: 'src', title: 'Src', content: 'Body.' });
+
+      const sourcePath = path.join(dir, 'src.md');
+      const targetPath = path.join(dir, 'dst.md');
+      const realUnlink = fs.unlink.bind(fs);
+      const unlinkSpy = jest.spyOn(fs, 'unlink').mockImplementation(async (p) => {
+        // Only fail the source-unlink during move(); let the rollback unlink
+        // (and any other unlinks) hit the real implementation so the test
+        // can clean up and inspect filesystem state correctly.
+        if (typeof p === 'string' && p === sourcePath) {
+          throw Object.assign(new Error('EACCES: simulated permission denied'), { code: 'EACCES' });
+        }
+        return realUnlink(p as Parameters<typeof realUnlink>[0]);
+      });
+
+      try {
+        await expect(store.move('src', 'dst')).rejects.toThrow(/EACCES/);
+
+        // The simulated source-unlink fired (and rollback was triggered).
+        expect(unlinkSpy).toHaveBeenCalledWith(sourcePath);
+
+        // Source still exists (unlink failed before deletion).
+        await expect(fs.access(sourcePath)).resolves.toBeUndefined();
+        // Target was rolled back.
+        await expect(fs.access(targetPath)).rejects.toThrow();
+      } finally {
+        unlinkSpy.mockRestore();
+      }
+    });
   });
 
   describe('watcher', () => {
