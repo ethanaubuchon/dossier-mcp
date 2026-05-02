@@ -228,7 +228,12 @@ export class NoteStore extends EventEmitter {
     const notePath = this.notePath(slug);
     await fs.mkdir(path.dirname(notePath), { recursive: true });
     const fileContent = matter.stringify(data.content, frontmatter as unknown as Record<string, unknown>);
-    await fs.writeFile(notePath, fileContent);
+    // Atomic overwrite: tmp file in the same directory + rename. The watcher
+    // stays quiet because awaitWriteFinish (not the `ignored` predicate alone)
+    // requires file size stability for 500ms before firing — the tmp file's
+    // create-then-rename lifecycle completes in milliseconds, so no event for
+    // the tmp path ever stabilizes.
+    await this.writeAtomically(notePath, fileContent, { mode: 'overwrite' });
 
     return {
       slug,
@@ -236,6 +241,66 @@ export class NoteStore extends EventEmitter {
       content: data.content,
       raw: fileContent,
     };
+  }
+
+  /**
+   * Write `content` to `targetPath` atomically.
+   *
+   * Strategy: write to a sibling `.tmp.*` file first, then either rename
+   * (`mode: 'overwrite'`) or hardlink (`mode: 'create'`) into place. Both
+   * primitives are atomic at the kernel level on the same filesystem, which is
+   * guaranteed here because the tmp file always lives in the same directory
+   * as the target.
+   *
+   * Crash recovery is automatic: orphan `.tmp.*` files are invisible to
+   * `walkMdFiles` (which filters by `.md` extension). The chokidar watcher
+   * also ignores them — and more importantly, awaitWriteFinish's stability
+   * window keeps the watcher quiet during the brief tmp lifecycle.
+   *
+   * Note on the tmp suffix: pid + timestamp + random tail assumes a single-
+   * process deployment. If we ever move to worker threads (which share pid),
+   * swap in `crypto.randomBytes` for a process-unique suffix.
+   */
+  private async writeAtomically(
+    targetPath: string,
+    content: string,
+    opts: { mode: 'create' | 'overwrite' }
+  ): Promise<void> {
+    const tmpPath = `${targetPath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}`;
+    try {
+      await fs.writeFile(tmpPath, content);
+      if (opts.mode === 'overwrite') {
+        // rename is atomic same-filesystem (guaranteed: tmp is a sibling of target)
+        await fs.rename(tmpPath, targetPath);
+        return; // tmp is gone after rename
+      }
+      // mode === 'create': atomic create-or-fail via hardlink. EEXIST surfaces
+      // if the target already exists, with no TOCTOU window.
+      // EXDEV (cross-device link) is structurally impossible here because tmp
+      // and target always share a directory (and therefore a filesystem).
+      try {
+        await fs.link(tmpPath, targetPath);
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code === 'EEXIST') {
+          throw new Error(`Note already exists at "${targetPath}"`);
+        }
+        throw e;
+      }
+      // Hardlink succeeded — drop the tmp reference, leaving the target as
+      // the sole link to the inode. Guard the cleanup: if it fails (extremely
+      // rare, e.g. EPERM on an exotic filesystem), the write itself logically
+      // succeeded — the target inode is in place. Re-throwing here would
+      // trigger move()'s rollback, which would unlink the just-linked target
+      // and silently destroy the user's data. Best-effort cleanup, then return.
+      await fs.unlink(tmpPath).catch(() => {});
+      return;
+    } catch (e) {
+      // Best-effort cleanup. Only reached on failure of writeFile / rename /
+      // link. After a successful rename the tmp is already gone (we returned
+      // above); after a successful link we returned above too.
+      await fs.unlink(tmpPath).catch(() => {});
+      throw e;
+    }
   }
 
   async move(oldSlug: string, newSlug: string): Promise<{ note: Note; updatedRefs: string[] }> {
@@ -277,36 +342,19 @@ export class NoteStore extends EventEmitter {
       content = source.raw;
     }
 
-    // 3. Atomic create-or-fail at the target. The 'wx' flag fails with EEXIST
-    //    if the file already exists, closing the TOCTOU window between an
-    //    existence check and a write. The try/finally ensures we close the
-    //    handle even if the write throws.
-    //
-    //    Known small gap: if writeFile succeeds but close() throws (extremely
-    //    rare on local filesystems — kernel has already buffered the data),
-    //    the exception bypasses step 4 and the vault is left with a duplicate
-    //    note rather than a clean rollback. Worst case is duplication, not
-    //    data loss; not worth the structural complexity to handle.
+    // 3. Atomic create-or-fail at the target via writeAtomically (write to
+    //    sibling tmp, then hardlink into place). The helper guarantees that
+    //    `newPath` either ends up fully written or is never created — no
+    //    partial-file leak even if writeFile throws midway. EEXIST is
+    //    surfaced as a structured error.
     await fs.mkdir(path.dirname(newPath), { recursive: true });
-    let fileHandle: fs.FileHandle;
-    try {
-      fileHandle = await fs.open(newPath, 'wx');
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === 'EEXIST') {
-        throw new Error(`Note already exists at "${newSlug}"`);
-      }
-      throw e;
-    }
-    try {
-      await fileHandle.writeFile(content);
-    } finally {
-      await fileHandle.close();
-    }
+    await this.writeAtomically(newPath, content, { mode: 'create' });
 
     // 4. Unlink old file. If this fails, roll back the new-location write so
     //    the pre-move state is restored exactly. The rollback is safe because
-    //    step 3 used 'wx' — the file at newPath was a brand new file we just
-    //    created, so deleting it cannot clobber pre-existing data.
+    //    writeAtomically's create mode used a hardlink that fails on EEXIST —
+    //    the file at newPath is a brand new file we just created, so deleting
+    //    it cannot clobber pre-existing data.
     try {
       await fs.unlink(oldPath);
     } catch (e) {
