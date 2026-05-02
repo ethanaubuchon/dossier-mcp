@@ -491,6 +491,140 @@ describe('NoteStore', () => {
     });
   });
 
+  describe('atomic write', () => {
+    // Helper: list any tmp orphans inside the vault (recursively).
+    async function findTmpFiles(root: string): Promise<string[]> {
+      const out: string[] = [];
+      async function walk(d: string): Promise<void> {
+        const entries = await fs.readdir(d, { withFileTypes: true });
+        for (const e of entries) {
+          const full = path.join(d, e.name);
+          if (e.isDirectory()) {
+            await walk(full);
+          } else if (e.isFile() && /\.tmp\./.test(e.name)) {
+            out.push(full);
+          }
+        }
+      }
+      await walk(root);
+      return out;
+    }
+
+    test('upsert leaves no .tmp.* files after a successful write', async () => {
+      await store.upsert({ slug: 'happy/path', title: 'Happy', content: 'Body.' });
+      const tmps = await findTmpFiles(dir);
+      expect(tmps).toEqual([]);
+    });
+
+    test('upsert preserves existing content if rename fails partway', async () => {
+      // Pre-populate the target with OLD content (via a successful upsert).
+      await store.upsert({ slug: 'target', title: 'Target', content: 'OLD' });
+      const targetPath = path.join(dir, 'target.md');
+      const before = await fs.readFile(targetPath, 'utf-8');
+      expect(before).toContain('OLD');
+
+      // Force the rename to throw on the next upsert.
+      const renameSpy = jest.spyOn(fs, 'rename').mockImplementation(async () => {
+        throw Object.assign(new Error('EIO: simulated rename failure'), { code: 'EIO' });
+      });
+
+      try {
+        await expect(
+          store.upsert({ slug: 'target', title: 'Target', content: 'NEW' })
+        ).rejects.toThrow(/rename failure/);
+
+        // Target file is untouched (still OLD, byte-for-byte).
+        const after = await fs.readFile(targetPath, 'utf-8');
+        expect(after).toBe(before);
+
+        // No tmp orphans left behind.
+        const tmps = await findTmpFiles(dir);
+        expect(tmps).toEqual([]);
+      } finally {
+        renameSpy.mockRestore();
+      }
+    });
+
+    test('upsert leaves target untouched if writeFile to tmp fails', async () => {
+      await store.upsert({ slug: 'target', title: 'Target', content: 'OLD' });
+      const targetPath = path.join(dir, 'target.md');
+      const before = await fs.readFile(targetPath, 'utf-8');
+
+      const writeSpy = jest.spyOn(fs, 'writeFile').mockImplementation(async () => {
+        throw Object.assign(new Error('ENOSPC: simulated disk full'), { code: 'ENOSPC' });
+      });
+
+      try {
+        await expect(
+          store.upsert({ slug: 'target', title: 'Target', content: 'NEW' })
+        ).rejects.toThrow(/disk full/);
+
+        // Target untouched.
+        const after = await fs.readFile(targetPath, 'utf-8');
+        expect(after).toBe(before);
+
+        // No tmp orphans (writeFile threw before tmp could be created — but
+        // even if a partial tmp existed, the catch block would clean it up).
+        const tmps = await findTmpFiles(dir);
+        expect(tmps).toEqual([]);
+      } finally {
+        writeSpy.mockRestore();
+      }
+    });
+
+    test('move leaves source intact and target absent if link fails (non-EEXIST)', async () => {
+      await store.upsert({ slug: 'src', title: 'Src', content: 'Body.' });
+      const sourcePath = path.join(dir, 'src.md');
+      const targetPath = path.join(dir, 'dst.md');
+
+      const linkSpy = jest.spyOn(fs, 'link').mockImplementation(async () => {
+        throw Object.assign(new Error('EACCES: simulated link denied'), { code: 'EACCES' });
+      });
+
+      try {
+        await expect(store.move('src', 'dst')).rejects.toThrow(/EACCES/);
+
+        // Source still exists at the old slug.
+        await expect(fs.access(sourcePath)).resolves.toBeUndefined();
+        // Target was never created.
+        await expect(fs.access(targetPath)).rejects.toThrow();
+        // No tmp orphans left behind.
+        const tmps = await findTmpFiles(dir);
+        expect(tmps).toEqual([]);
+      } finally {
+        linkSpy.mockRestore();
+      }
+    });
+
+    test('move still surfaces "already exists" when target exists', async () => {
+      // Verifies the EEXIST -> "already exists" mapping inside writeAtomically
+      // preserves the existing contract relied on by the MCP server's
+      // user-friendly error mapping.
+      await store.upsert({ slug: 'src', title: 'Src', content: 'A.' });
+      await store.upsert({ slug: 'dst', title: 'Dst', content: 'B.' });
+      await expect(store.move('src', 'dst')).rejects.toThrow(/already exists/);
+      // No tmp orphans either way.
+      const tmps = await findTmpFiles(dir);
+      expect(tmps).toEqual([]);
+    });
+
+    test('chokidar emits at most one coalesced change for a single upsert', async () => {
+      // The atomic-write tmp lifecycle (writeFile + rename, ms-scale) must NOT
+      // trigger separate watcher events. awaitWriteFinish's stability window
+      // is what keeps the watcher quiet during the brief tmp lifecycle —
+      // verifying that here.
+      let changeCount = 0;
+      store.on('change', () => { changeCount++; });
+
+      await store.upsert({ slug: 'watched-note', title: 'Watched', content: 'Body.' });
+
+      // awaitWriteFinish stability (500ms) + debounce (300ms) + slack for CI.
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+
+      expect(changeCount).toBeLessThanOrEqual(1);
+    }, 5000);
+  });
+
   describe('watcher', () => {
     const NOTE_FRONTMATTER = '---\ntitle: Note\ndate: 2026-01-01\ntags: []\nrelated: []\n---\n\nContent.';
 

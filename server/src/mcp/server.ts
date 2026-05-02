@@ -282,7 +282,9 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         // Surface the "already exists" case with user-friendly guidance.
-        if (msg.startsWith(`Note already exists at "${new_slug}"`)) {
+        // The underlying error message contains the absolute target path
+        // (from writeAtomically); we match on the prefix instead of the slug.
+        if (msg.startsWith('Note already exists at "')) {
           return {
             isError: true,
             content: [{ type: 'text', text: `Note already exists at "${new_slug}" — choose a different slug.` }],
