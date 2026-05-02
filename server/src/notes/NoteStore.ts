@@ -16,7 +16,9 @@ export class NoteStore extends EventEmitter {
 
   constructor(notesDir: string) {
     super();
-    this.notesDir = notesDir;
+    // Resolve to an absolute path so the boundary check in notePath() and the
+    // ancestor walk in pruneEmptyParents() are stable regardless of cwd.
+    this.notesDir = path.resolve(notesDir);
   }
 
   async initialize(): Promise<void> {
@@ -88,8 +90,33 @@ export class NoteStore extends EventEmitter {
     return slugify(title, { lower: true, strict: true });
   }
 
+  private validateSlug(slug: string): void {
+    if (slug.length === 0) {
+      throw new Error('Invalid slug: must be non-empty');
+    }
+    if (slug.includes('\0')) {
+      throw new Error('Invalid slug: contains null byte');
+    }
+    if (slug.startsWith('/') || slug.endsWith('/')) {
+      throw new Error(`Invalid slug "${slug}": must not start or end with "/"`);
+    }
+    const segments = slug.split('/');
+    if (segments.some((seg) => seg === '..')) {
+      throw new Error(`Invalid slug "${slug}": must not contain ".." segments`);
+    }
+  }
+
   private notePath(slug: string): string {
-    return path.join(this.notesDir, `${slug}.md`);
+    this.validateSlug(slug);
+    const resolved = path.resolve(this.notesDir, `${slug}.md`);
+    // Defense in depth: even if validateSlug ever misses a case, ensure the
+    // resolved path stays inside the vault. Using `notesDir + path.sep` prevents
+    // matches against sibling directories that share a prefix (e.g. "/vault" vs
+    // "/vault-evil").
+    if (resolved !== this.notesDir && !resolved.startsWith(this.notesDir + path.sep)) {
+      throw new Error(`Invalid slug "${slug}": escapes vault`);
+    }
+    return resolved;
   }
 
   async list(): Promise<NoteListItem[]> {

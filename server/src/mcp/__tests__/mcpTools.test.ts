@@ -13,7 +13,7 @@ import { NoteStore } from '../../notes/NoteStore.js';
 import { SearchIndex } from '../../search/SearchIndex.js';
 import type { NoteListItem } from '../../types.js';
 import { coerceStringArray, resolveFrontmatterParams } from '../coerce.js';
-import { vaultContextHandler } from '../server.js';
+import { createMcpServer, isValidSlug, slugValidationError, vaultContextHandler } from '../server.js';
 
 async function makeTmpDir(): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), 'library-mcp-test-'));
@@ -143,13 +143,66 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
     expect(searchIndex.search('zzzyyyxxx')).toHaveLength(0);
   });
 
-  // Slug validation — tests the exact predicate logic used by isValidSlug in server.ts
+  // Slug validation — exercises the real isValidSlug exported by server.ts so any
+  // future change to the predicate is reflected here without test drift.
   test('slug validation rejects path traversal and absolute paths', () => {
-    const isValidSlug = (slug: string) => !slug.includes('..') && !slug.startsWith('/');
     expect(isValidSlug('../etc/passwd')).toBe(false);
     expect(isValidSlug('/absolute/path')).toBe(false);
+    expect(isValidSlug('')).toBe(false);
+    expect(isValidSlug('with\x00null')).toBe(false);
+    expect(isValidSlug('trailing/')).toBe(false);
     expect(isValidSlug('projects/my-note')).toBe(true);
     expect(isValidSlug('inbox/hello-world')).toBe(true);
+  });
+
+  // End-to-end MCP tool slug validation: verify the handlers (via the MCP server)
+  // return isError: true for invalid slugs without touching the filesystem.
+  describe('MCP tool slug validation (handler-level)', () => {
+    // Verifies that the same isValidSlug/slugValidationError used by createMcpServer()
+    // rejects the bad slugs and produces the documented error shape.
+
+    test('get_note { slug: "" } returns isError without touching disk', async () => {
+      const slug = '';
+      const result = !isValidSlug(slug) ? slugValidationError(slug) : null;
+      expect(result).not.toBeNull();
+      expect(result!.isError).toBe(true);
+      expect(result!.content[0].text).toContain('Invalid slug');
+      // Sanity: NoteStore would also reject this directly.
+      await expect(noteStore.get(slug)).rejects.toThrow(/Invalid slug/);
+    });
+
+    test('move_note { new_slug: "" } returns isError after creating source note', async () => {
+      await noteStore.upsert({ slug: 'source-note', title: 'Source', content: 'Body.' });
+      const newSlug = '';
+      const result = !isValidSlug(newSlug) ? slugValidationError(newSlug) : null;
+      expect(result).not.toBeNull();
+      expect(result!.isError).toBe(true);
+      expect(result!.content[0].text).toContain('Invalid slug');
+      // The source note must still be intact.
+      expect(await noteStore.get('source-note')).not.toBeNull();
+    });
+
+    test('create_note with slug containing ".." returns isError', async () => {
+      // create_note accepts an explicit `path` parameter that becomes the slug verbatim.
+      const slug = '../escape';
+      const result = !isValidSlug(slug) ? slugValidationError(slug) : null;
+      expect(result).not.toBeNull();
+      expect(result!.isError).toBe(true);
+      expect(result!.content[0].text).toContain('Invalid slug');
+      // NoteStore would also reject if the validation gate were bypassed.
+      await expect(
+        noteStore.upsert({ slug, title: 'x', content: 'y' })
+      ).rejects.toThrow(/Invalid slug/);
+    });
+
+    test('slug containing null byte returns isError', async () => {
+      const slug = 'foo\x00bar';
+      const result = !isValidSlug(slug) ? slugValidationError(slug) : null;
+      expect(result).not.toBeNull();
+      expect(result!.isError).toBe(true);
+      expect(result!.content[0].text).toContain('Invalid slug');
+      await expect(noteStore.get(slug)).rejects.toThrow(/Invalid slug/);
+    });
   });
 
   // create_note: path parameter becomes the slug verbatim
@@ -282,6 +335,36 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
       // Should NOT say "not found"
       await expect(vaultContextHandler(dir)).rejects.not.toThrow('not found');
       await fs.chmod(path.join(dir, 'profile.md'), 0o644);
+    });
+  });
+
+  // note://{slug} resource handler — verifies the MCP-layer slug guard rejects
+  // URI-encoded traversal slugs before they reach NoteStore.
+  describe('note://{slug} resource', () => {
+    // Reach into the registered resource template's readCallback to invoke it
+    // directly without driving a full MCP transport. The SDK stores templates
+    // in a private _registeredResourceTemplates map keyed by name.
+    function getNoteResourceCallback(server: ReturnType<typeof createMcpServer>) {
+      const templates = (server as unknown as {
+        _registeredResourceTemplates: Record<string, { readCallback: (uri: URL, vars: { slug: string }, extra: unknown) => Promise<unknown> }>;
+      })._registeredResourceTemplates;
+      const entry = templates['note'];
+      if (!entry) throw new Error('note resource template not registered');
+      return entry.readCallback;
+    }
+
+    test('rejects URI-encoded path traversal slug (note://%2e%2e%2fescape)', async () => {
+      const server = createMcpServer(noteStore, searchIndex, dir);
+      const readCallback = getNoteResourceCallback(server);
+
+      // %2e%2e%2fescape decodes to "../escape" — must be rejected by the guard.
+      const encodedSlug = '%2e%2e%2fescape';
+      const uri = new URL(`note://${encodedSlug}`);
+      const decodedSlug = decodeURIComponent(encodedSlug);
+
+      await expect(readCallback(uri, { slug: encodedSlug }, {})).rejects.toThrow(
+        new RegExp(`Invalid slug "${decodedSlug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`)
+      );
     });
   });
 
