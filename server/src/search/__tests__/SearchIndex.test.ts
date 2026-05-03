@@ -250,6 +250,26 @@ describe('SearchIndex', () => {
     expect(results[0].slug).toBe('projects/finances/overview');
   });
 
+  test('issue #46: excerpt does not center on a related-slug match', () => {
+    index.buildIndexWithContent([
+      {
+        slug: 'overview',
+        frontmatter: {
+          title: 'Finances Overview',
+          date: '2026-01-01',
+          tags: [],
+          related: ['react-hooks-deep-dive'],
+        },
+        content: 'A long body of meaningful prose about finances and budgeting.',
+      },
+    ]);
+    const results = index.search('hooks');
+    expect(results).toHaveLength(1);
+    // Excerpt must come from human-readable text (title or body),
+    // not the related slug `react-hooks-deep-dive`.
+    expect(results[0].excerpt).not.toMatch(/react-hooks-deep-dive/);
+  });
+
   test('issue #43: search does not return NaN-suppressed empty when avgDocLen is 0', () => {
     // All-empty corpus: notes exist but every field is empty after tokenization.
     // Without the guard, avgDocLen = 0 → docLen/avgDocLen = NaN → score NaN → filtered to [].

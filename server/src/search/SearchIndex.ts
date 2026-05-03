@@ -15,7 +15,7 @@ interface IndexEntry {
   frontmatter: NoteListItem['frontmatter'];
   terms: Map<string, number>; // term -> weighted frequency
   docLen: number; // total weighted term count
-  text: string; // for excerpts
+  text: string; // for excerpts — excludes related slugs
 }
 
 export class SearchIndex {
@@ -36,7 +36,6 @@ export class SearchIndex {
       const text = [
         note.frontmatter.title,
         ...note.frontmatter.tags,
-        ...note.frontmatter.related,
       ].join(' ');
 
       return { slug: note.slug, frontmatter: note.frontmatter, terms, docLen, text };
@@ -57,7 +56,6 @@ export class SearchIndex {
       const text = [
         note.frontmatter.title,
         ...note.frontmatter.tags,
-        ...note.frontmatter.related,
         note.content,
       ].join(' ');
 
