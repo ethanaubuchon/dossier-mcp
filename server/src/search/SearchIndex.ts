@@ -127,7 +127,7 @@ export class SearchIndex {
   }
 
   private addWeightedTerms(terms: Map<string, number>, text: string, weight: number): number {
-    const words = text.toLowerCase().split(/\W+/).filter((w) => w.length > 1);
+    const words = text.toLowerCase().split(/\W+/).filter((w) => w.length >= 1);
     for (const word of words) {
       terms.set(word, (terms.get(word) || 0) + weight);
     }
@@ -152,7 +152,7 @@ export class SearchIndex {
     return query
       .toLowerCase()
       .split(/\W+/)
-      .filter((w) => w.length > 1);
+      .filter((w) => w.length >= 1);
   }
 
   private makeExcerpt(text: string, terms: string[]): string {

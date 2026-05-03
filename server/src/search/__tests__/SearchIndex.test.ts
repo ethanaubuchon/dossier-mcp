@@ -250,6 +250,40 @@ describe('SearchIndex', () => {
     expect(results[0].slug).toBe('projects/finances/overview');
   });
 
+  test('issue #54: single-character search query "C" matches notes mentioning C', () => {
+    index.buildIndexWithContent([
+      {
+        slug: 'c-lang',
+        frontmatter: { title: 'The C Programming Language', date: '2026-01-01', tags: ['c'], related: [] },
+        content: 'Notes on C.',
+      },
+      {
+        slug: 'rust-lang',
+        frontmatter: { title: 'Rust Programming Language', date: '2026-01-01', tags: ['rust'], related: [] },
+        content: 'Notes on Rust.',
+      },
+    ]);
+    const results = index.search('C');
+    expect(results.length).toBeGreaterThanOrEqual(1);
+    expect(results[0].slug).toBe('c-lang');
+  });
+
+  test('issue #54: single-character query does not trigger prefix matching', () => {
+    // Without the length-3 prefix gate, "c" would match "computer", "code", etc.
+    // We keep the gate (prefix-match requires >= 3 chars), so single-char queries
+    // are exact-only.
+    index.buildIndexWithContent([
+      {
+        slug: 'a',
+        frontmatter: { title: 'Computer Programming', date: '2026-01-01', tags: [], related: [] },
+        content: 'About computers.',
+      },
+    ]);
+    // No exact "c" token in the indexed text, so result is empty.
+    const results = index.search('c');
+    expect(results).toHaveLength(0);
+  });
+
   test('issue #46: excerpt does not center on a related-slug match', () => {
     index.buildIndexWithContent([
       {
