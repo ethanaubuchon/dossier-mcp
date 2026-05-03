@@ -81,4 +81,30 @@ describe('extractTodos', () => {
   test('trims trailing whitespace from todo text', () => {
     expect(extractTodos('- [ ] Trailing spaces here   ')).toEqual(['Trailing spaces here']);
   });
+
+  test('inline triple-backticks in a todo are NOT treated as a code-block fence', () => {
+    // Without the line-anchor fix, the regex would strip "make build" from
+    // inside the todo, breaking it.
+    const content = '- [ ] Run ```make build``` and deploy';
+    expect(extractTodos(content)).toEqual(['Run ```make build``` and deploy']);
+  });
+
+  test('multiple todos with inline backticks all parse correctly', () => {
+    const content = [
+      '- [ ] First with `inline` code',
+      '- [ ] Second with ```triple``` inline',
+      '- [ ] Third normal',
+    ].join('\n');
+    expect(extractTodos(content)).toEqual([
+      'First with `inline` code',
+      'Second with ```triple``` inline',
+      'Third normal',
+    ]);
+  });
+
+  test('skips todo with all-whitespace body', () => {
+    expect(extractTodos('- [ ] ')).toEqual([]);
+    expect(extractTodos('- [ ]   ')).toEqual([]);
+    expect(extractTodos('- [ ] \t  ')).toEqual([]);
+  });
 });

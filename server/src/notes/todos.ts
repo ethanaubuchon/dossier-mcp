@@ -1,5 +1,5 @@
-const FENCED_CODE_BLOCK_RE = /```[\s\S]*?```/g;
-const TODO_LINE_RE = /^[ \t]*[-*+] \[ \] (.+?)[ \t]*$/gm;
+const FENCED_CODE_BLOCK_RE = /^```[^\n]*\n[\s\S]*?^```[ \t]*$/gm;
+const TODO_LINE_RE = /^[ \t]*[-*+] \[ \] (\S.*?)[ \t]*$/gm;
 
 export function extractTodos(content: string): string[] {
   const stripped = content.replace(FENCED_CODE_BLOCK_RE, '');
