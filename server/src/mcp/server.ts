@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { NoteStore } from '../notes/NoteStore.js';
 import { SearchIndex } from '../search/SearchIndex.js';
 import { coerceStringArray, resolveFrontmatterParams } from './coerce.js';
+import { extractTodos } from '../notes/todos.js';
 
 export async function vaultContextHandler(notesDir: string) {
   try {
@@ -221,6 +222,37 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
           return { content: [{ type: 'text', text: `No notes found matching "${query}".` }] };
         }
         return { content: [{ type: 'text', text: JSON.stringify(results, null, 2) }] };
+      })
+  );
+
+  server.tool(
+    'list_todos',
+    'List notes that contain incomplete `- [ ]` markdown checkboxes, with each todo\'s text excerpted. ' +
+    'Filter by slug prefix to scope to a folder. ' +
+    'Useful for finding open work across the vault. Note: checkbox syntax inside fenced code blocks is ignored.',
+    {
+      path: z.string().optional().describe('Optional slug prefix to filter by (e.g. "projects/startup"). Trailing slash is normalized automatically.'),
+      limit: z.number().int().min(1).max(100).optional().describe('Maximum number of notes to return (default: 10, max: 100)'),
+    },
+    async ({ path: prefix, limit }) =>
+      withToolError('Failed to list todos', async () => {
+        const notes = await noteStore.listWithContent();
+        const normalized = prefix && (prefix.endsWith('/') ? prefix : prefix + '/');
+        const scoped = normalized ? notes.filter((n) => n.slug.startsWith(normalized)) : notes;
+
+        const withTodos = scoped
+          .map((n) => ({
+            slug: n.slug,
+            title: n.frontmatter.title,
+            todos: extractTodos(n.content),
+          }))
+          .filter((n) => n.todos.length > 0)
+          .slice(0, limit ?? 10);
+
+        if (withTodos.length === 0) {
+          return { content: [{ type: 'text', text: 'No notes found with incomplete TODOs.' }] };
+        }
+        return { content: [{ type: 'text', text: JSON.stringify(withTodos, null, 2) }] };
       })
   );
 

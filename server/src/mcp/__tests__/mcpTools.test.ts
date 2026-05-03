@@ -475,6 +475,99 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
     });
   });
 
+  describe('list_todos tool', () => {
+    type ToolEntry = {
+      inputSchema: import('zod').ZodType;
+      handler: (args: unknown, extra: unknown) => Promise<{
+        isError?: boolean;
+        content: { type: string; text: string }[];
+      }>;
+    };
+
+    function getTool(server: ReturnType<typeof createMcpServer>, name: string): ToolEntry {
+      const tools = (server as unknown as { _registeredTools: Record<string, ToolEntry> })._registeredTools;
+      const entry = tools[name];
+      if (!entry) throw new Error(`Tool "${name}" not registered`);
+      return entry;
+    }
+
+    test('returns empty-result message when no notes have todos', async () => {
+      await noteStore.upsert({ title: 'Plain', content: 'No checkboxes here.' });
+      const server = createMcpServer(noteStore, searchIndex, dir);
+      const result = await getTool(server, 'list_todos').handler({}, {});
+      expect(result.content[0].text).toContain('No notes found with incomplete TODOs');
+    });
+
+    test('returns notes with their unchecked todos', async () => {
+      await noteStore.upsert({
+        title: 'Tasks',
+        content: '- [ ] First task\n- [x] Done task\n- [ ] Second task',
+      });
+      await noteStore.upsert({ title: 'Empty', content: 'no todos' });
+
+      const server = createMcpServer(noteStore, searchIndex, dir);
+      const result = await getTool(server, 'list_todos').handler({}, {});
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed).toHaveLength(1);
+      expect(parsed[0].slug).toBe('tasks');
+      expect(parsed[0].title).toBe('Tasks');
+      expect(parsed[0].todos).toEqual(['First task', 'Second task']);
+    });
+
+    test('filters by path prefix', async () => {
+      await noteStore.upsert({ slug: 'projects/alpha', title: 'Alpha', content: '- [ ] alpha task' });
+      await noteStore.upsert({ slug: 'projects/beta', title: 'Beta', content: '- [ ] beta task' });
+      await noteStore.upsert({ slug: 'inbox/gamma', title: 'Gamma', content: '- [ ] gamma task' });
+
+      const server = createMcpServer(noteStore, searchIndex, dir);
+      const result = await getTool(server, 'list_todos').handler({ path: 'projects' }, {});
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed).toHaveLength(2);
+      expect(parsed.map((p: { slug: string }) => p.slug).sort()).toEqual([
+        'projects/alpha',
+        'projects/beta',
+      ]);
+    });
+
+    test('respects limit parameter', async () => {
+      for (let i = 0; i < 5; i++) {
+        await noteStore.upsert({ title: `Note ${i}`, content: `- [ ] task ${i}` });
+      }
+      const server = createMcpServer(noteStore, searchIndex, dir);
+      const result = await getTool(server, 'list_todos').handler({ limit: 2 }, {});
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed).toHaveLength(2);
+    });
+
+    test('limit out of bounds (0, 101, -1) fails Zod validation', () => {
+      const server = createMcpServer(noteStore, searchIndex, dir);
+      const { inputSchema } = getTool(server, 'list_todos');
+      expect(inputSchema.safeParse({ limit: 0 }).success).toBe(false);
+      expect(inputSchema.safeParse({ limit: 101 }).success).toBe(false);
+      expect(inputSchema.safeParse({ limit: -1 }).success).toBe(false);
+      expect(inputSchema.safeParse({ limit: 1.5 }).success).toBe(false);
+    });
+
+    test('omitted params are valid (use defaults)', () => {
+      const server = createMcpServer(noteStore, searchIndex, dir);
+      const { inputSchema } = getTool(server, 'list_todos');
+      expect(inputSchema.safeParse({}).success).toBe(true);
+    });
+
+    test('handler returns isError when noteStore.listWithContent throws', async () => {
+      const original = noteStore.listWithContent.bind(noteStore);
+      noteStore.listWithContent = async () => { throw new Error('boom'); };
+      try {
+        const server = createMcpServer(noteStore, searchIndex, dir);
+        const result = await getTool(server, 'list_todos').handler({}, {});
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toContain('boom');
+      } finally {
+        noteStore.listWithContent = original;
+      }
+    });
+  });
+
   describe('move_note', () => {
     test('move_note relocates note and updates references', async () => {
       await noteStore.upsert({ slug: 'old-slug', title: 'Moving', content: 'Body.' });
