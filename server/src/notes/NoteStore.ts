@@ -120,31 +120,15 @@ export class NoteStore extends EventEmitter {
   }
 
   async list(): Promise<NoteListItem[]> {
-    const mdFiles = await this.walkMdFiles(this.notesDir);
-    const notes = await Promise.all(
-      mdFiles.map(async (filePath) => {
-        const rel = path.relative(this.notesDir, filePath);
-        const slug = rel.replace(/\.md$/, '');
-        try {
-          const raw = await fs.readFile(filePath, 'utf-8');
-          const parsed = matter(raw);
-          return {
-            slug,
-            frontmatter: this.parseFrontmatter(parsed.data),
-          } as NoteListItem;
-        } catch (e) {
-          console.error(`[library] Skipping unreadable note "${slug}":`, e instanceof Error ? e.message : e);
-          return null;
-        }
-      })
-    );
-
-    return notes
-      .filter((n): n is NoteListItem => n !== null)
-      .sort((a, b) => b.frontmatter.date.localeCompare(a.frontmatter.date));
+    const all = await this.readAllNotes();
+    return all.map(({ slug, frontmatter }) => ({ slug, frontmatter }));
   }
 
   async listWithContent(): Promise<Array<NoteListItem & { content: string }>> {
+    return this.readAllNotes();
+  }
+
+  private async readAllNotes(): Promise<Array<NoteListItem & { content: string }>> {
     const mdFiles = await this.walkMdFiles(this.notesDir);
     const notes = await Promise.all(
       mdFiles.map(async (filePath) => {
