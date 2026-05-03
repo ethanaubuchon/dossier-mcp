@@ -120,31 +120,15 @@ export class NoteStore extends EventEmitter {
   }
 
   async list(): Promise<NoteListItem[]> {
-    const mdFiles = await this.walkMdFiles(this.notesDir);
-    const notes = await Promise.all(
-      mdFiles.map(async (filePath) => {
-        const rel = path.relative(this.notesDir, filePath);
-        const slug = rel.replace(/\.md$/, '');
-        try {
-          const raw = await fs.readFile(filePath, 'utf-8');
-          const parsed = matter(raw);
-          return {
-            slug,
-            frontmatter: this.parseFrontmatter(parsed.data),
-          } as NoteListItem;
-        } catch (e) {
-          console.error(`[library] Skipping unreadable note "${slug}":`, e instanceof Error ? e.message : e);
-          return null;
-        }
-      })
-    );
-
-    return notes
-      .filter((n): n is NoteListItem => n !== null)
-      .sort((a, b) => b.frontmatter.date.localeCompare(a.frontmatter.date));
+    const all = await this.readAllNotes();
+    return all.map(({ slug, frontmatter }) => ({ slug, frontmatter }));
   }
 
   async listWithContent(): Promise<Array<NoteListItem & { content: string }>> {
+    return this.readAllNotes();
+  }
+
+  private async readAllNotes(): Promise<Array<NoteListItem & { content: string }>> {
     const mdFiles = await this.walkMdFiles(this.notesDir);
     const notes = await Promise.all(
       mdFiles.map(async (filePath) => {
@@ -170,7 +154,12 @@ export class NoteStore extends EventEmitter {
       .sort((a, b) => b.frontmatter.date.localeCompare(a.frontmatter.date));
   }
 
-  private async walkMdFiles(dir: string): Promise<string[]> {
+  private async walkMdFiles(dir: string, visited?: Set<string>): Promise<string[]> {
+    const seen = visited ?? new Set<string>();
+    const realDir = await fs.realpath(dir).catch(() => dir);
+    if (seen.has(realDir)) return [];
+    seen.add(realDir);
+
     const results: string[] = [];
     let entries: import('fs').Dirent[];
     try {
@@ -180,9 +169,18 @@ export class NoteStore extends EventEmitter {
     }
     for (const entry of entries) {
       const fullPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        results.push(...(await this.walkMdFiles(fullPath)));
-      } else if (entry.isFile() && entry.name.endsWith('.md') && !fullPath.includes('.sync-conflict')) {
+      let isDir = entry.isDirectory();
+      let isFile = entry.isFile();
+      if (entry.isSymbolicLink()) {
+        // Resolve the link target. stat() follows symlinks; lstat() does not.
+        const stat = await fs.stat(fullPath).catch(() => null);
+        if (!stat) continue;
+        isDir = stat.isDirectory();
+        isFile = stat.isFile();
+      }
+      if (isDir) {
+        results.push(...(await this.walkMdFiles(fullPath, seen)));
+      } else if (isFile && entry.name.endsWith('.md') && !fullPath.includes('.sync-conflict')) {
         results.push(fullPath);
       }
     }
@@ -420,9 +418,23 @@ export class NoteStore extends EventEmitter {
   }
 
   private parseFrontmatter(data: Record<string, unknown>): NoteFrontmatter {
+    // gray-matter parses YAML date scalars (e.g. `date: 2020-01-01`) as JS
+    // Date objects. Extract the UTC calendar date in that case, which preserves
+    // the author's intent regardless of local timezone. Plain strings (e.g.
+    // from notes created by this app) stay as-is. Anything else (missing,
+    // malformed non-ISO string) falls back to today.
+    let date: string;
+    if (data.date instanceof Date) {
+      date = data.date.toISOString().split('T')[0];
+    } else {
+      const rawDate = String(data.date ?? '');
+      date = /^\d{4}-\d{2}-\d{2}$/.test(rawDate)
+        ? rawDate
+        : new Date().toISOString().split('T')[0];
+    }
     return {
       title: String(data.title || 'Untitled'),
-      date: String(data.date || new Date().toISOString().split('T')[0]),
+      date,
       tags: Array.isArray(data.tags) ? data.tags.map(String) : [],
       related: Array.isArray(data.related) ? data.related.map(String) : [],
     };
