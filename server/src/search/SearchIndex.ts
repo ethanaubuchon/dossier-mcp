@@ -10,6 +10,10 @@ const FIELD_WEIGHTS = {
   body: 1.0,
 } as const;
 
+const EXCERPT_PRE_CHARS = 40;
+const EXCERPT_POST_CHARS = 80;
+const EXCERPT_FALLBACK_LEN = 120;
+
 interface IndexEntry {
   slug: string;
   frontmatter: NoteListItem['frontmatter'];
@@ -160,11 +164,11 @@ export class SearchIndex {
     for (const term of terms) {
       const idx = lower.indexOf(term);
       if (idx >= 0) {
-        const start = Math.max(0, idx - 40);
-        const end = Math.min(text.length, idx + 80);
+        const start = Math.max(0, idx - EXCERPT_PRE_CHARS);
+        const end = Math.min(text.length, idx + EXCERPT_POST_CHARS);
         return (start > 0 ? '...' : '') + text.slice(start, end) + (end < text.length ? '...' : '');
       }
     }
-    return text.slice(0, 120);
+    return text.slice(0, EXCERPT_FALLBACK_LEN);
   }
 }
