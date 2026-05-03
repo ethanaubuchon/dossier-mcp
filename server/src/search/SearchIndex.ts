@@ -10,12 +10,16 @@ const FIELD_WEIGHTS = {
   body: 1.0,
 } as const;
 
+const EXCERPT_PRE_CHARS = 40;
+const EXCERPT_POST_CHARS = 80;
+const EXCERPT_FALLBACK_LEN = 120;
+
 interface IndexEntry {
   slug: string;
   frontmatter: NoteListItem['frontmatter'];
   terms: Map<string, number>; // term -> weighted frequency
   docLen: number; // total weighted term count
-  text: string; // for excerpts
+  text: string; // for excerpts — excludes related slugs
 }
 
 export class SearchIndex {
@@ -36,7 +40,6 @@ export class SearchIndex {
       const text = [
         note.frontmatter.title,
         ...note.frontmatter.tags,
-        ...note.frontmatter.related,
       ].join(' ');
 
       return { slug: note.slug, frontmatter: note.frontmatter, terms, docLen, text };
@@ -57,7 +60,6 @@ export class SearchIndex {
       const text = [
         note.frontmatter.title,
         ...note.frontmatter.tags,
-        ...note.frontmatter.related,
         note.content,
       ].join(' ');
 
@@ -71,6 +73,7 @@ export class SearchIndex {
     if (queryTerms.length === 0) return [];
 
     const results: SearchResult[] = [];
+    const safeAvgDocLen = this.avgDocLen > 0 ? this.avgDocLen : 1;
 
     // Precompute IDF per query term to avoid redundant O(entries) scans
     const idfMap = new Map<string, number>();
@@ -88,7 +91,7 @@ export class SearchIndex {
         const idf = idfMap.get(term)!;
         const tfNorm =
           (tf * (BM25_K1 + 1)) /
-          (tf + BM25_K1 * (1 - BM25_B + BM25_B * (entry.docLen / this.avgDocLen)));
+          (tf + BM25_K1 * (1 - BM25_B + BM25_B * (entry.docLen / safeAvgDocLen)));
         score += idf * tfNorm;
       }
       if (score > 0) {
@@ -128,7 +131,7 @@ export class SearchIndex {
   }
 
   private addWeightedTerms(terms: Map<string, number>, text: string, weight: number): number {
-    const words = text.toLowerCase().split(/\W+/).filter((w) => w.length > 1);
+    const words = text.toLowerCase().split(/\W+/).filter((w) => w.length >= 1);
     for (const word of words) {
       terms.set(word, (terms.get(word) || 0) + weight);
     }
@@ -153,7 +156,7 @@ export class SearchIndex {
     return query
       .toLowerCase()
       .split(/\W+/)
-      .filter((w) => w.length > 1);
+      .filter((w) => w.length >= 1);
   }
 
   private makeExcerpt(text: string, terms: string[]): string {
@@ -161,11 +164,11 @@ export class SearchIndex {
     for (const term of terms) {
       const idx = lower.indexOf(term);
       if (idx >= 0) {
-        const start = Math.max(0, idx - 40);
-        const end = Math.min(text.length, idx + 80);
+        const start = Math.max(0, idx - EXCERPT_PRE_CHARS);
+        const end = Math.min(text.length, idx + EXCERPT_POST_CHARS);
         return (start > 0 ? '...' : '') + text.slice(start, end) + (end < text.length ? '...' : '');
       }
     }
-    return text.slice(0, 120);
+    return text.slice(0, EXCERPT_FALLBACK_LEN);
   }
 }
