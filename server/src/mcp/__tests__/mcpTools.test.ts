@@ -736,3 +736,57 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
     });
   });
 });
+
+describe('withToolError helper (issue #50)', () => {
+  // Helper is not exported; verify behavior end-to-end via a tool that uses it.
+  // We test the observable contract: errors thrown inside a wrapped handler
+  // surface as { isError: true, content: [{ type: 'text', text: "<prefix>: <message>" }] }
+  // rather than propagating to the transport.
+
+  let dir: string;
+  let noteStore: NoteStore;
+  let searchIndex: SearchIndex;
+
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'library-mcp-test-'));
+    noteStore = new NoteStore(dir);
+    searchIndex = new SearchIndex();
+    await noteStore.initialize();
+  });
+
+  afterEach(async () => {
+    await noteStore.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  test('list_notes returns isError response when noteStore.list throws', async () => {
+    // Force list() to throw by closing the store's underlying directory then
+    // making the directory unreadable. Simpler: mock list() via prototype override.
+    const originalList = noteStore.list.bind(noteStore);
+    noteStore.list = async () => { throw new Error('synthetic failure'); };
+    try {
+      const server = createMcpServer(noteStore, searchIndex, dir);
+      const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown, extra: unknown) => Promise<{ isError?: boolean; content: { type: string; text: string }[] }> }> })._registeredTools;
+      const result = await tools['list_notes'].handler({}, {});
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain('Failed to list notes');
+      expect(result.content[0].text).toContain('synthetic failure');
+    } finally {
+      noteStore.list = originalList;
+    }
+  });
+
+  test('search_notes returns isError response when search throws', async () => {
+    const originalSearch = searchIndex.search.bind(searchIndex);
+    searchIndex.search = () => { throw new Error('boom'); };
+    try {
+      const server = createMcpServer(noteStore, searchIndex, dir);
+      const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown, extra: unknown) => Promise<{ isError?: boolean; content: { type: string; text: string }[] }> }> })._registeredTools;
+      const result = await tools['search_notes'].handler({ query: 'x', limit: 10 }, {});
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain('boom');
+    } finally {
+      searchIndex.search = originalSearch;
+    }
+  });
+});
