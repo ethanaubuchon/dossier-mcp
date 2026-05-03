@@ -26,5 +26,4 @@ export interface SearchResult {
 
 export interface Config {
   notesDir: string;
-  frontmatterTemplate: string;
 }

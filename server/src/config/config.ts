@@ -8,7 +8,6 @@ const CONFIG_PATH = path.join(__dirname, '../../config.json');
 
 const DEFAULT_CONFIG: Config = {
   notesDir: path.join(__dirname, '../../../notes'),
-  frontmatterTemplate: '---\ntitle: "{{title}}"\ndate: {{date}}\ntags: []\nrelated: []\n---',
 };
 
 export async function loadConfig(): Promise<Config> {
