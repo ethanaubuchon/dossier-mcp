@@ -40,6 +40,20 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
     version: '1.0.0',
   });
 
+  type ToolResponse = {
+    content: Array<{ type: 'text'; text: string }>;
+    isError?: boolean;
+  };
+
+  async function withToolError(prefix: string, fn: () => Promise<ToolResponse>): Promise<ToolResponse> {
+    try {
+      return await fn();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return { isError: true, content: [{ type: 'text', text: `${prefix}: ${msg}` }] };
+    }
+  }
+
   // ── Tools ──────────────────────────────────────────────────────────────────
 
   server.tool(
@@ -49,18 +63,11 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
     'and how to navigate it effectively. ' +
     'Load this silently for context; do not summarize or recite its contents unless the user explicitly asks.',
     {},
-    async () => {
-      try {
+    async () =>
+      withToolError('Failed to load vault context', async () => {
         const result = await vaultContextHandler(notesDir);
         return { content: [{ type: 'text', text: result.contents[0].text }] };
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        return {
-          isError: true,
-          content: [{ type: 'text', text: msg }],
-        };
-      }
-    }
+      })
   );
 
   server.tool(
@@ -69,20 +76,13 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
     {
       path: z.string().optional().describe('Optional slug prefix to filter by (e.g. "projects/startup"). Trailing slash is normalized automatically.'),
     },
-    async ({ path: prefix }) => {
-      let notes;
-      try {
-        notes = await noteStore.list();
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        return { isError: true, content: [{ type: 'text', text: `Failed to list notes: ${msg}` }] };
-      }
-      const normalized = prefix && (prefix.endsWith('/') ? prefix : prefix + '/');
-      const filtered = normalized ? notes.filter((n) => n.slug.startsWith(normalized)) : notes;
-      return {
-        content: [{ type: 'text', text: JSON.stringify(filtered, null, 2) }],
-      };
-    }
+    async ({ path: prefix }) =>
+      withToolError('Failed to list notes', async () => {
+        const notes = await noteStore.list();
+        const normalized = prefix && (prefix.endsWith('/') ? prefix : prefix + '/');
+        const filtered = normalized ? notes.filter((n) => n.slug.startsWith(normalized)) : notes;
+        return { content: [{ type: 'text', text: JSON.stringify(filtered, null, 2) }] };
+      })
   );
 
   server.tool(
@@ -91,25 +91,13 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
     { slug: z.string().describe('The note slug (e.g. "react-hooks-rules")') },
     async ({ slug }) => {
       if (!isValidSlug(slug)) return slugValidationError(slug);
-      let note;
-      try {
-        note = await noteStore.get(slug);
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        return {
-          isError: true,
-          content: [{ type: 'text', text: `Failed to read note "${slug}": ${msg}` }],
-        };
-      }
-      if (!note) {
-        return {
-          content: [{ type: 'text', text: `Note "${slug}" not found.` }],
-          isError: true,
-        };
-      }
-      return {
-        content: [{ type: 'text', text: note.raw }],
-      };
+      return withToolError(`Failed to read note "${slug}"`, async () => {
+        const note = await noteStore.get(slug);
+        if (!note) {
+          return { isError: true, content: [{ type: 'text', text: `Note "${slug}" not found.` }] };
+        }
+        return { content: [{ type: 'text', text: note.raw }] };
+      });
     }
   );
 
@@ -196,29 +184,26 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
     { slug: z.string().describe('The slug of the note to delete') },
     async ({ slug }) => {
       if (!isValidSlug(slug)) return slugValidationError(slug);
-      let deleted;
-      try {
-        deleted = await noteStore.delete(slug);
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        return { isError: true, content: [{ type: 'text', text: `Failed to delete note "${slug}": ${msg}` }] };
+      const result = await withToolError(`Failed to delete note "${slug}"`, async () => {
+        const deleted = await noteStore.delete(slug);
+        if (!deleted) {
+          return { isError: true, content: [{ type: 'text', text: `Note "${slug}" not found.` }] };
+        }
+        return { content: [{ type: 'text', text: `Deleted note "${slug}".` }] };
+      });
+      // Secondary best-effort: rebuild the search index after a successful delete.
+      // A failure here is logged but does not change the response — the deletion
+      // itself succeeded, and the index will catch up on the next watcher tick.
+      if (!result.isError) {
+        try {
+          const allNotes = await noteStore.listWithContent();
+          searchIndex.buildIndexWithContent(allNotes);
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          console.error(`[library] Failed to rebuild search index after deleting "${slug}":`, msg);
+        }
       }
-      if (!deleted) {
-        return {
-          content: [{ type: 'text', text: `Note "${slug}" not found.` }],
-          isError: true,
-        };
-      }
-      try {
-        const allNotes = await noteStore.listWithContent();
-        searchIndex.buildIndexWithContent(allNotes);
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        console.error(`[library] Failed to rebuild search index after deleting "${slug}":`, msg);
-      }
-      return {
-        content: [{ type: 'text', text: `Deleted note "${slug}".` }],
-      };
+      return result;
     }
   );
 
@@ -227,30 +212,16 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
     'Search the knowledge base using keyword search. Returns matching notes scored by relevance, with excerpts.',
     {
       query: z.string().describe('Search query — keywords to search for'),
-      limit: z.number().optional().describe('Maximum number of results to return (default: 10)'),
+      limit: z.number().int().min(1).max(100).optional().describe('Maximum number of results to return (default: 10, max: 100)'),
     },
-    async ({ query, limit }) => {
-      let results;
-      try {
-        results = searchIndex.search(query, limit ?? 10);
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        return { isError: true, content: [{ type: 'text', text: `Search failed: ${msg}` }] };
-      }
-      if (results.length === 0) {
-        return {
-          content: [{ type: 'text', text: `No notes found matching "${query}".` }],
-        };
-      }
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify(results, null, 2),
-          },
-        ],
-      };
-    }
+    async ({ query, limit }) =>
+      withToolError('Search failed', async () => {
+        const results = searchIndex.search(query, limit ?? 10);
+        if (results.length === 0) {
+          return { content: [{ type: 'text', text: `No notes found matching "${query}".` }] };
+        }
+        return { content: [{ type: 'text', text: JSON.stringify(results, null, 2) }] };
+      })
   );
 
   server.tool(

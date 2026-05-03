@@ -505,6 +505,62 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
     });
   });
 
+  describe('search_notes limit validation (issue #53)', () => {
+    type ToolEntry = {
+      inputSchema: z.ZodType;
+      handler: (args: unknown, extra: unknown) => Promise<unknown>;
+    };
+
+    function getTool(server: ReturnType<typeof createMcpServer>, name: string): ToolEntry {
+      const tools = (server as unknown as { _registeredTools: Record<string, ToolEntry> })._registeredTools;
+      const entry = tools[name];
+      if (!entry) throw new Error(`Tool "${name}" not registered`);
+      return entry;
+    }
+
+    test('limit: 0 fails Zod validation', () => {
+      const server = createMcpServer(noteStore, searchIndex, dir);
+      const { inputSchema } = getTool(server, 'search_notes');
+      const parsed = inputSchema.safeParse({ query: 'x', limit: 0 });
+      expect(parsed.success).toBe(false);
+    });
+
+    test('limit: -1 fails Zod validation', () => {
+      const server = createMcpServer(noteStore, searchIndex, dir);
+      const { inputSchema } = getTool(server, 'search_notes');
+      const parsed = inputSchema.safeParse({ query: 'x', limit: -1 });
+      expect(parsed.success).toBe(false);
+    });
+
+    test('limit: 999999 fails Zod validation', () => {
+      const server = createMcpServer(noteStore, searchIndex, dir);
+      const { inputSchema } = getTool(server, 'search_notes');
+      const parsed = inputSchema.safeParse({ query: 'x', limit: 999999 });
+      expect(parsed.success).toBe(false);
+    });
+
+    test('limit: 1.5 (non-integer) fails Zod validation', () => {
+      const server = createMcpServer(noteStore, searchIndex, dir);
+      const { inputSchema } = getTool(server, 'search_notes');
+      const parsed = inputSchema.safeParse({ query: 'x', limit: 1.5 });
+      expect(parsed.success).toBe(false);
+    });
+
+    test('limit: 50 (in range) passes', () => {
+      const server = createMcpServer(noteStore, searchIndex, dir);
+      const { inputSchema } = getTool(server, 'search_notes');
+      const parsed = inputSchema.safeParse({ query: 'x', limit: 50 });
+      expect(parsed.success).toBe(true);
+    });
+
+    test('limit: omitted (undefined) passes — falls back to default', () => {
+      const server = createMcpServer(noteStore, searchIndex, dir);
+      const { inputSchema } = getTool(server, 'search_notes');
+      const parsed = inputSchema.safeParse({ query: 'x' });
+      expect(parsed.success).toBe(true);
+    });
+  });
+
   describe('coerceStringArray', () => {
     test('passes through an existing array unchanged', () => {
       expect(coerceStringArray(['tag1', 'tag2'])).toEqual(['tag1', 'tag2']);
@@ -678,5 +734,59 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
       const stored = await noteStore.get('precedence-note');
       expect(stored!.frontmatter.tags).toEqual(['fm-tag']);
     });
+  });
+});
+
+describe('withToolError helper (issue #50)', () => {
+  // Helper is not exported; verify behavior end-to-end via a tool that uses it.
+  // We test the observable contract: errors thrown inside a wrapped handler
+  // surface as { isError: true, content: [{ type: 'text', text: "<prefix>: <message>" }] }
+  // rather than propagating to the transport.
+
+  let dir: string;
+  let noteStore: NoteStore;
+  let searchIndex: SearchIndex;
+
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'library-mcp-test-'));
+    noteStore = new NoteStore(dir);
+    searchIndex = new SearchIndex();
+    await noteStore.initialize();
+  });
+
+  afterEach(async () => {
+    await noteStore.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  test('list_notes returns isError response when noteStore.list throws', async () => {
+    // Force list() to throw by closing the store's underlying directory then
+    // making the directory unreadable. Simpler: mock list() via prototype override.
+    const originalList = noteStore.list.bind(noteStore);
+    noteStore.list = async () => { throw new Error('synthetic failure'); };
+    try {
+      const server = createMcpServer(noteStore, searchIndex, dir);
+      const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown, extra: unknown) => Promise<{ isError?: boolean; content: { type: string; text: string }[] }> }> })._registeredTools;
+      const result = await tools['list_notes'].handler({}, {});
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain('Failed to list notes');
+      expect(result.content[0].text).toContain('synthetic failure');
+    } finally {
+      noteStore.list = originalList;
+    }
+  });
+
+  test('search_notes returns isError response when search throws', async () => {
+    const originalSearch = searchIndex.search.bind(searchIndex);
+    searchIndex.search = () => { throw new Error('boom'); };
+    try {
+      const server = createMcpServer(noteStore, searchIndex, dir);
+      const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown, extra: unknown) => Promise<{ isError?: boolean; content: { type: string; text: string }[] }> }> })._registeredTools;
+      const result = await tools['search_notes'].handler({ query: 'x', limit: 10 }, {});
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain('boom');
+    } finally {
+      searchIndex.search = originalSearch;
+    }
   });
 });
