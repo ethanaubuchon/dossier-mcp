@@ -249,4 +249,40 @@ describe('SearchIndex', () => {
     expect(results).toHaveLength(1);
     expect(results[0].slug).toBe('projects/finances/overview');
   });
+
+  test('issue #43: search does not return NaN-suppressed empty when avgDocLen is 0', () => {
+    // All-empty corpus: notes exist but every field is empty after tokenization.
+    // Without the guard, avgDocLen = 0 → docLen/avgDocLen = NaN → score NaN → filtered to [].
+    index.buildIndexWithContent([
+      {
+        slug: 'a',
+        frontmatter: { title: '', date: '2026-01-01', tags: [], related: [] },
+        content: '',
+      },
+    ]);
+    // We don't assert a match (there are no terms), but search should not throw or
+    // produce NaN scores under the hood. A query with no matching terms returns [].
+    expect(index.search('anything')).toEqual([]);
+
+    // Now mix in a real note via direct injection of an entry with empty content
+    // alongside a note whose only term is in the title — the all-empty entry
+    // would historically poison avgDocLen across the corpus calculation but more
+    // importantly make scoring NaN if it were the sole match path.
+    index.buildIndexWithContent([
+      {
+        slug: 'empty',
+        frontmatter: { title: '', date: '2026-01-01', tags: [], related: [] },
+        content: '',
+      },
+      {
+        slug: 'real',
+        frontmatter: { title: 'Kubernetes', date: '2026-01-01', tags: [], related: [] },
+        content: '',
+      },
+    ]);
+    const results = index.search('kubernetes');
+    expect(results).toHaveLength(1);
+    expect(results[0].slug).toBe('real');
+    expect(Number.isFinite(results[0].score)).toBe(true);
+  });
 });

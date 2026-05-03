@@ -71,6 +71,7 @@ export class SearchIndex {
     if (queryTerms.length === 0) return [];
 
     const results: SearchResult[] = [];
+    const safeAvgDocLen = this.avgDocLen > 0 ? this.avgDocLen : 1;
 
     // Precompute IDF per query term to avoid redundant O(entries) scans
     const idfMap = new Map<string, number>();
@@ -88,7 +89,7 @@ export class SearchIndex {
         const idf = idfMap.get(term)!;
         const tfNorm =
           (tf * (BM25_K1 + 1)) /
-          (tf + BM25_K1 * (1 - BM25_B + BM25_B * (entry.docLen / this.avgDocLen)));
+          (tf + BM25_K1 * (1 - BM25_B + BM25_B * (entry.docLen / safeAvgDocLen)));
         score += idf * tfNorm;
       }
       if (score > 0) {
