@@ -304,24 +304,23 @@ describe('SearchIndex', () => {
     expect(results[0].excerpt).not.toMatch(/react-hooks-deep-dive/);
   });
 
-  test('issue #43: search does not return NaN-suppressed empty when avgDocLen is 0', () => {
-    // All-empty corpus: notes exist but every field is empty after tokenization.
-    // Without the guard, avgDocLen = 0 → docLen/avgDocLen = NaN → score NaN → filtered to [].
+  test('issue #43: search on empty-content corpus does not throw or leak NaN scores', () => {
+    // Single note with all-empty fields → docLen = 0 and avgDocLen = 0.
+    // The safeAvgDocLen guard prevents x/0 NaN if the inner loop ever reached
+    // the BM25 length-normalization line. With current control flow tf === 0
+    // short-circuits earlier, but we lock in the defensive contract anyway.
     index.buildIndexWithContent([
       {
-        slug: 'a',
+        slug: 'empty',
         frontmatter: { title: '', date: '2026-01-01', tags: [], related: [] },
         content: '',
       },
     ]);
-    // We don't assert a match (there are no terms), but search should not throw or
-    // produce NaN scores under the hood. A query with no matching terms returns [].
+    expect(() => index.search('anything')).not.toThrow();
     expect(index.search('anything')).toEqual([]);
+  });
 
-    // Now mix in a real note via direct injection of an entry with empty content
-    // alongside a note whose only term is in the title — the all-empty entry
-    // would historically poison avgDocLen across the corpus calculation but more
-    // importantly make scoring NaN if it were the sole match path.
+  test('issue #43: search on mixed empty + real notes returns finite scores', () => {
     index.buildIndexWithContent([
       {
         slug: 'empty',
