@@ -170,7 +170,12 @@ export class NoteStore extends EventEmitter {
       .sort((a, b) => b.frontmatter.date.localeCompare(a.frontmatter.date));
   }
 
-  private async walkMdFiles(dir: string): Promise<string[]> {
+  private async walkMdFiles(dir: string, visited?: Set<string>): Promise<string[]> {
+    const seen = visited ?? new Set<string>();
+    const realDir = await fs.realpath(dir).catch(() => dir);
+    if (seen.has(realDir)) return [];
+    seen.add(realDir);
+
     const results: string[] = [];
     let entries: import('fs').Dirent[];
     try {
@@ -180,9 +185,18 @@ export class NoteStore extends EventEmitter {
     }
     for (const entry of entries) {
       const fullPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        results.push(...(await this.walkMdFiles(fullPath)));
-      } else if (entry.isFile() && entry.name.endsWith('.md') && !fullPath.includes('.sync-conflict')) {
+      let isDir = entry.isDirectory();
+      let isFile = entry.isFile();
+      if (entry.isSymbolicLink()) {
+        // Resolve the link target. stat() follows symlinks; lstat() does not.
+        const stat = await fs.stat(fullPath).catch(() => null);
+        if (!stat) continue;
+        isDir = stat.isDirectory();
+        isFile = stat.isFile();
+      }
+      if (isDir) {
+        results.push(...(await this.walkMdFiles(fullPath, seen)));
+      } else if (isFile && entry.name.endsWith('.md') && !fullPath.includes('.sync-conflict')) {
         results.push(fullPath);
       }
     }

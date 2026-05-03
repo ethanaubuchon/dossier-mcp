@@ -216,6 +216,44 @@ describe('NoteStore', () => {
     expect(byContent.map((n) => n.slug)).toEqual(byList.map((n) => n.slug));
   });
 
+  test('issue #45: list includes notes inside symlinked subdirectories', async () => {
+    // Outer note inside the vault.
+    await store.upsert({ title: 'Outer', content: 'outer body' });
+
+    // Create an external directory with a note, then symlink it into the vault.
+    const external = await fs.mkdtemp(path.join(os.tmpdir(), 'library-external-'));
+    await fs.writeFile(
+      path.join(external, 'shared.md'),
+      '---\ntitle: Shared\ndate: 2026-05-01\n---\nshared body'
+    );
+    await fs.symlink(external, path.join(dir, 'linked'));
+
+    try {
+      const notes = await store.list();
+      const slugs = notes.map((n) => n.slug);
+      expect(slugs).toContain('outer');
+      expect(slugs).toContain('linked/shared');
+    } finally {
+      await fs.rm(external, { recursive: true, force: true });
+    }
+  });
+
+  test('issue #45: walkMdFiles tolerates symlink loops without infinite recursion', async () => {
+    // a/ contains a symlink "loop" pointing back to a/, plus a real note.
+    const aDir = path.join(dir, 'a');
+    await fs.mkdir(aDir);
+    await fs.writeFile(
+      path.join(aDir, 'real.md'),
+      '---\ntitle: Real\ndate: 2026-05-01\n---\nreal body'
+    );
+    await fs.symlink(aDir, path.join(aDir, 'loop'));
+
+    // Should complete (not hang) and include the real note exactly once.
+    const notes = await store.list();
+    const realCount = notes.filter((n) => n.slug === 'a/real').length;
+    expect(realCount).toBe(1);
+  });
+
   test('list() handles unreadable subdirectory gracefully', async () => {
     await store.upsert({ title: 'Root Note', content: 'OK.' });
     const subdir = path.join(dir, 'locked-folder');
