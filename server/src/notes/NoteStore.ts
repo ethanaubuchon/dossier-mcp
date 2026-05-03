@@ -420,9 +420,23 @@ export class NoteStore extends EventEmitter {
   }
 
   private parseFrontmatter(data: Record<string, unknown>): NoteFrontmatter {
+    // gray-matter parses YAML date scalars (e.g. `date: 2020-01-01`) as JS
+    // Date objects. Extract the UTC calendar date in that case, which preserves
+    // the author's intent regardless of local timezone. Plain strings (e.g.
+    // from notes created by this app) stay as-is. Anything else (missing,
+    // malformed non-ISO string) falls back to today.
+    let date: string;
+    if (data.date instanceof Date) {
+      date = data.date.toISOString().split('T')[0];
+    } else {
+      const rawDate = String(data.date ?? '');
+      date = /^\d{4}-\d{2}-\d{2}$/.test(rawDate)
+        ? rawDate
+        : new Date().toISOString().split('T')[0];
+    }
     return {
       title: String(data.title || 'Untitled'),
-      date: String(data.date || new Date().toISOString().split('T')[0]),
+      date,
       tags: Array.isArray(data.tags) ? data.tags.map(String) : [],
       related: Array.isArray(data.related) ? data.related.map(String) : [],
     };

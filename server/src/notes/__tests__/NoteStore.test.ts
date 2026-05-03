@@ -90,6 +90,33 @@ describe('NoteStore', () => {
     expect(deleted).toBe(false);
   });
 
+  test('issue #47: non-ISO date in frontmatter falls back to today, preserving sort order', async () => {
+    // Note A: explicit valid ISO date in 2020 — should sort last (oldest).
+    await fs.writeFile(
+      path.join(dir, 'old-note.md'),
+      '---\ntitle: Old Note\ndate: 2020-01-01\n---\nBody.'
+    );
+    // Note B: malformed date "January 2025" — should fall back to today,
+    // sorting at the top alongside any other today-dated notes.
+    await fs.writeFile(
+      path.join(dir, 'bad-date.md'),
+      '---\ntitle: Bad Date\ndate: January 2025\n---\nBody.'
+    );
+
+    const today = new Date().toISOString().split('T')[0];
+    const notes = await store.list();
+    const bad = notes.find((n) => n.slug === 'bad-date');
+    const old = notes.find((n) => n.slug === 'old-note');
+    expect(bad).toBeDefined();
+    expect(old).toBeDefined();
+    expect(bad!.frontmatter.date).toBe(today);
+    expect(old!.frontmatter.date).toBe('2020-01-01');
+    // Sort: bad-date (today) before old-note (2020).
+    const badIdx = notes.findIndex((n) => n.slug === 'bad-date');
+    const oldIdx = notes.findIndex((n) => n.slug === 'old-note');
+    expect(badIdx).toBeLessThan(oldIdx);
+  });
+
   test('list sorts by date descending', async () => {
     await store.upsert({ title: 'Alpha', content: 'a' });
     await store.upsert({ title: 'Beta', content: 'b' });
