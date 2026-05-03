@@ -227,7 +227,7 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
     'Search the knowledge base using keyword search. Returns matching notes scored by relevance, with excerpts.',
     {
       query: z.string().describe('Search query — keywords to search for'),
-      limit: z.number().optional().describe('Maximum number of results to return (default: 10)'),
+      limit: z.number().int().min(1).max(100).optional().describe('Maximum number of results to return (default: 10, max: 100)'),
     },
     async ({ query, limit }) => {
       let results;

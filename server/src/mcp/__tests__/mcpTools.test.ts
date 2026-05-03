@@ -505,6 +505,62 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
     });
   });
 
+  describe('search_notes limit validation (issue #53)', () => {
+    type ToolEntry = {
+      inputSchema: z.ZodType;
+      handler: (args: unknown, extra: unknown) => Promise<unknown>;
+    };
+
+    function getTool(server: ReturnType<typeof createMcpServer>, name: string): ToolEntry {
+      const tools = (server as unknown as { _registeredTools: Record<string, ToolEntry> })._registeredTools;
+      const entry = tools[name];
+      if (!entry) throw new Error(`Tool "${name}" not registered`);
+      return entry;
+    }
+
+    test('limit: 0 fails Zod validation', () => {
+      const server = createMcpServer(noteStore, searchIndex, dir);
+      const { inputSchema } = getTool(server, 'search_notes');
+      const parsed = inputSchema.safeParse({ query: 'x', limit: 0 });
+      expect(parsed.success).toBe(false);
+    });
+
+    test('limit: -1 fails Zod validation', () => {
+      const server = createMcpServer(noteStore, searchIndex, dir);
+      const { inputSchema } = getTool(server, 'search_notes');
+      const parsed = inputSchema.safeParse({ query: 'x', limit: -1 });
+      expect(parsed.success).toBe(false);
+    });
+
+    test('limit: 999999 fails Zod validation', () => {
+      const server = createMcpServer(noteStore, searchIndex, dir);
+      const { inputSchema } = getTool(server, 'search_notes');
+      const parsed = inputSchema.safeParse({ query: 'x', limit: 999999 });
+      expect(parsed.success).toBe(false);
+    });
+
+    test('limit: 1.5 (non-integer) fails Zod validation', () => {
+      const server = createMcpServer(noteStore, searchIndex, dir);
+      const { inputSchema } = getTool(server, 'search_notes');
+      const parsed = inputSchema.safeParse({ query: 'x', limit: 1.5 });
+      expect(parsed.success).toBe(false);
+    });
+
+    test('limit: 50 (in range) passes', () => {
+      const server = createMcpServer(noteStore, searchIndex, dir);
+      const { inputSchema } = getTool(server, 'search_notes');
+      const parsed = inputSchema.safeParse({ query: 'x', limit: 50 });
+      expect(parsed.success).toBe(true);
+    });
+
+    test('limit: omitted (undefined) passes — falls back to default', () => {
+      const server = createMcpServer(noteStore, searchIndex, dir);
+      const { inputSchema } = getTool(server, 'search_notes');
+      const parsed = inputSchema.safeParse({ query: 'x' });
+      expect(parsed.success).toBe(true);
+    });
+  });
+
   describe('coerceStringArray', () => {
     test('passes through an existing array unchanged', () => {
       expect(coerceStringArray(['tag1', 'tag2'])).toEqual(['tag1', 'tag2']);
