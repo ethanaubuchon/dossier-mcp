@@ -370,78 +370,78 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
 
   describe('resolveFrontmatterParams', () => {
     test('returns provided title and content unchanged when no frontmatter in content', () => {
-      const result = resolveFrontmatterParams({ title: 'My Note', content: 'Body text.', tags: undefined, related: undefined });
-      expect(result).toEqual({ ok: true, title: 'My Note', content: 'Body text.', tags: undefined, related: undefined });
+      const result = resolveFrontmatterParams({ title: 'My Note', content: 'Body text.', tags: undefined, related: undefined, frontmatter: undefined });
+      expect(result).toEqual({ ok: true, title: 'My Note', content: 'Body text.', tags: undefined, related: undefined, frontmatter: undefined });
     });
 
     test('extracts title from frontmatter when title param is absent', () => {
       const content = '---\ntitle: Extracted Title\n---\nBody text.';
-      const result = resolveFrontmatterParams({ title: undefined, content, tags: undefined, related: undefined });
-      expect(result).toEqual({ ok: true, title: 'Extracted Title', content: 'Body text.', tags: undefined, related: undefined });
+      const result = resolveFrontmatterParams({ title: undefined, content, tags: undefined, related: undefined, frontmatter: undefined });
+      expect(result).toEqual({ ok: true, title: 'Extracted Title', content: 'Body text.', tags: undefined, related: undefined, frontmatter: undefined });
     });
 
     test('extracts tags and related from frontmatter along with title', () => {
       const content = '---\ntitle: Full Note\ntags:\n  - foo\n  - bar\nrelated:\n  - other/note\n---\nBody text.';
-      const result = resolveFrontmatterParams({ title: undefined, content, tags: undefined, related: undefined });
+      const result = resolveFrontmatterParams({ title: undefined, content, tags: undefined, related: undefined, frontmatter: undefined });
       expect(result).toEqual({ ok: true, title: 'Full Note', content: 'Body text.', tags: ['foo', 'bar'], related: ['other/note'] });
     });
 
     test('explicit title overrides frontmatter title', () => {
       const content = '---\ntitle: Frontmatter Title\ntags:\n  - foo\n---\nBody text.';
-      const result = resolveFrontmatterParams({ title: 'Explicit Title', content, tags: undefined, related: undefined });
+      const result = resolveFrontmatterParams({ title: 'Explicit Title', content, tags: undefined, related: undefined, frontmatter: undefined });
       expect(result).toEqual({ ok: true, title: 'Explicit Title', content: 'Body text.', tags: ['foo'], related: undefined });
     });
 
     test('explicit tags override frontmatter tags', () => {
       const content = '---\ntitle: Note\ntags:\n  - from-frontmatter\n---\nBody.';
-      const result = resolveFrontmatterParams({ title: undefined, content, tags: ['explicit-tag'], related: undefined });
+      const result = resolveFrontmatterParams({ title: undefined, content, tags: ['explicit-tag'], related: undefined, frontmatter: undefined });
       expect(result).toEqual({ ok: true, title: 'Note', content: 'Body.', tags: ['explicit-tag'], related: undefined });
     });
 
     test('returns error when title is absent and frontmatter has no title', () => {
       const content = '---\ntags:\n  - foo\n---\nBody text.';
-      const result = resolveFrontmatterParams({ title: undefined, content, tags: undefined, related: undefined });
+      const result = resolveFrontmatterParams({ title: undefined, content, tags: undefined, related: undefined, frontmatter: undefined });
       expect(result).toMatchObject({ ok: false, error: expect.stringMatching(/frontmatter was detected/i) });
     });
 
     test('returns error when title is absent and content has no frontmatter', () => {
-      const result = resolveFrontmatterParams({ title: undefined, content: 'Just body text.', tags: undefined, related: undefined });
+      const result = resolveFrontmatterParams({ title: undefined, content: 'Just body text.', tags: undefined, related: undefined, frontmatter: undefined });
       expect(result).toMatchObject({ ok: false, error: expect.stringContaining('include it in frontmatter') });
       expect(result.ok === false && result.error).not.toMatch(/frontmatter was detected/i);
     });
 
     test('strips frontmatter from content body when frontmatter is present', () => {
       const content = '---\ntitle: My Note\n---\n\nActual body here.';
-      const result = resolveFrontmatterParams({ title: undefined, content, tags: undefined, related: undefined });
+      const result = resolveFrontmatterParams({ title: undefined, content, tags: undefined, related: undefined, frontmatter: undefined });
       expect(result).toMatchObject({ ok: true, content: 'Actual body here.' });
     });
 
     test('returns error with parse details when content has malformed frontmatter', () => {
       const content = '---\ntitle: foo: bar: baz\ntags: [unclosed\n---\nBody.';
-      const result = resolveFrontmatterParams({ title: undefined, content, tags: undefined, related: undefined });
+      const result = resolveFrontmatterParams({ title: undefined, content, tags: undefined, related: undefined, frontmatter: undefined });
       expect(result).toMatchObject({ ok: false, error: expect.stringMatching(/failed to parse/i) });
     });
 
     test('explicit related overrides frontmatter related', () => {
       const content = '---\ntitle: Note\nrelated:\n  - old/note\n---\nBody.';
-      const result = resolveFrontmatterParams({ title: undefined, content, tags: undefined, related: ['new/note'] });
+      const result = resolveFrontmatterParams({ title: undefined, content, tags: undefined, related: ['new/note'], frontmatter: undefined });
       expect(result).toMatchObject({ ok: true, related: ['new/note'] });
     });
 
     test('returns error when title is empty string', () => {
-      const result = resolveFrontmatterParams({ title: '', content: 'Body.', tags: undefined, related: undefined });
+      const result = resolveFrontmatterParams({ title: '', content: 'Body.', tags: undefined, related: undefined, frontmatter: undefined });
       expect(result).toMatchObject({ ok: false, error: expect.stringContaining('title') });
     });
 
     test('returns error when frontmatter title is a number (e.g. title: 2024)', () => {
       const content = '---\ntitle: 2024\ntags:\n  - year\n---\nBody.';
-      const result = resolveFrontmatterParams({ title: undefined, content, tags: undefined, related: undefined });
+      const result = resolveFrontmatterParams({ title: undefined, content, tags: undefined, related: undefined, frontmatter: undefined });
       expect(result).toMatchObject({ ok: false, error: expect.stringContaining('title') });
     });
 
     test('update_note handler pattern: resolveFrontmatterParams error propagates as isError response', () => {
       // Simulates the handler's error routing: if (!resolved.ok) return { isError: true, ... }
-      const resolved = resolveFrontmatterParams({ title: undefined, content: '---\ntags:\n  - foo\n---\nBody.', tags: undefined, related: undefined });
+      const resolved = resolveFrontmatterParams({ title: undefined, content: '---\ntags:\n  - foo\n---\nBody.', tags: undefined, related: undefined, frontmatter: undefined });
       expect(resolved.ok).toBe(false);
       if (!resolved.ok) {
         const handlerResponse = { isError: true as const, content: [{ type: 'text' as const, text: resolved.error }] };
@@ -457,6 +457,7 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
         content: '---\ntitle: Foo\ntags: []\n---\nBody.',
         tags: undefined,
         related: undefined,
+        frontmatter: undefined,
       });
       expect(result).toMatchObject({ ok: true, title: 'Foo', tags: undefined });
     });
@@ -465,7 +466,7 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
       await noteStore.upsert({ slug: 'inbox/round-trip-note', title: 'Round Trip Note', content: 'Round trip body.', tags: ['rt'] });
       const note = await noteStore.get('inbox/round-trip-note');
       expect(note).not.toBeNull();
-      const result = resolveFrontmatterParams({ title: undefined, content: note!.raw, tags: undefined, related: undefined });
+      const result = resolveFrontmatterParams({ title: undefined, content: note!.raw, tags: undefined, related: undefined, frontmatter: undefined });
       expect(result).toMatchObject({ ok: true, title: 'Round Trip Note' });
       if (result.ok) {
         expect(result.content.trim()).toBe('Round trip body.');
@@ -719,7 +720,7 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
       const related = relatedSchema.parse(undefined);
       expect(tags).toBeUndefined();
 
-      const resolved = resolveFrontmatterParams({ title: 'Has Tags', content: 'Body.', tags, related });
+      const resolved = resolveFrontmatterParams({ title: 'Has Tags', content: 'Body.', tags, related, frontmatter: undefined });
       expect(resolved.ok).toBe(true);
       if (!resolved.ok) return;
 
@@ -736,7 +737,7 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
       const related = relatedSchema.parse([]);
       expect(related).toBeUndefined();
 
-      const resolved = resolveFrontmatterParams({ title: 'Has Related', content: 'Body.', tags, related });
+      const resolved = resolveFrontmatterParams({ title: 'Has Related', content: 'Body.', tags, related, frontmatter: undefined });
       expect(resolved.ok).toBe(true);
       if (!resolved.ok) return;
 
@@ -755,7 +756,7 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
       const tags = tagsSchema.parse(undefined);
       const related = relatedSchema.parse(undefined);
 
-      const resolved = resolveFrontmatterParams({ title: undefined, content: roundTripContent, tags, related });
+      const resolved = resolveFrontmatterParams({ title: undefined, content: roundTripContent, tags, related, frontmatter: undefined });
       expect(resolved.ok).toBe(true);
       if (!resolved.ok) return;
       // The fix's payoff: empty arrays in frontmatter become undefined, so upsert preserves.
@@ -793,7 +794,7 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
       const related = relatedSchema.parse(undefined);
       expect(tags).toEqual(['new']);
 
-      const resolved = resolveFrontmatterParams({ title: 'Replace', content: 'Body.', tags, related });
+      const resolved = resolveFrontmatterParams({ title: 'Replace', content: 'Body.', tags, related, frontmatter: undefined });
       expect(resolved.ok).toBe(true);
       if (!resolved.ok) return;
 
@@ -817,7 +818,7 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
       expect(tags).toBeUndefined();
 
       const fmContent = '---\ntitle: Precedence\ntags:\n  - fm-tag\n---\nNew body.';
-      const resolved = resolveFrontmatterParams({ title: undefined, content: fmContent, tags, related });
+      const resolved = resolveFrontmatterParams({ title: undefined, content: fmContent, tags, related, frontmatter: undefined });
       expect(resolved.ok).toBe(true);
       if (!resolved.ok) return;
       // Frontmatter tags win because the explicit param coerced to undefined.
@@ -881,5 +882,248 @@ describe('withToolError helper (issue #50)', () => {
     } finally {
       searchIndex.search = originalSearch;
     }
+  });
+});
+
+describe('resolveFrontmatterParams — extraction + denylist', () => {
+  test('extracts non-typed fields from embedded content into frontmatter', () => {
+    const content = `---
+title: Note
+status: shaping
+priority: 2
+---
+body
+`;
+    const r = resolveFrontmatterParams({ title: undefined, content, tags: undefined, related: undefined, frontmatter: undefined });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.title).toBe('Note');
+    expect(r.frontmatter).toEqual({ status: 'shaping', priority: 2 });
+    expect(r.content.trim()).toBe('body');
+  });
+
+  test('explicit frontmatter param overrides extracted on key collision', () => {
+    const content = `---
+title: Note
+status: shaping
+---
+body
+`;
+    const r = resolveFrontmatterParams({
+      title: undefined,
+      content,
+      tags: undefined,
+      related: undefined,
+      frontmatter: { status: 'tracked', extra: 'x' },
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.frontmatter).toEqual({ status: 'tracked', extra: 'x' });
+  });
+
+  test('denylist: explicit frontmatter param with title raises first-fail error', () => {
+    const r = resolveFrontmatterParams({
+      title: 'OK',
+      content: 'body',
+      tags: undefined,
+      related: undefined,
+      frontmatter: { title: 'NotAllowed' },
+    });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toBe(`Cannot set 'title' via frontmatter; use the typed param.`);
+  });
+
+  test.each(['title', 'date', 'tags', 'related'])(
+    'denylist: explicit frontmatter param with %s raises error',
+    (key) => {
+      const r = resolveFrontmatterParams({
+        title: 'OK',
+        content: 'body',
+        tags: undefined,
+        related: undefined,
+        frontmatter: { [key]: 'value' },
+      });
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(r.error).toBe(`Cannot set '${key}' via frontmatter; use the typed param.`);
+    },
+  );
+
+  test('extracted typed-named keys (title, date, tags, related) are NOT routed into frontmatter map', () => {
+    // The four typed fields go through their own extraction paths; they must
+    // not also leak into the `frontmatter` extras map.
+    const content = `---
+title: Note
+date: '2026-05-09'
+tags: [a]
+related: [r1]
+status: ok
+---
+body
+`;
+    const r = resolveFrontmatterParams({ title: undefined, content, tags: undefined, related: undefined, frontmatter: undefined });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.frontmatter).toEqual({ status: 'ok' });
+  });
+
+  test('returns undefined frontmatter when no extras and no explicit param', () => {
+    const content = `---
+title: Plain
+---
+body
+`;
+    const r = resolveFrontmatterParams({ title: undefined, content, tags: undefined, related: undefined, frontmatter: undefined });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.frontmatter).toBeUndefined();
+  });
+});
+
+describe('frontmatter passthrough — MCP handler integration', () => {
+  let dir: string;
+  let noteStore: NoteStore;
+  let searchIndex: SearchIndex;
+  let server: ReturnType<typeof createMcpServer>;
+
+  beforeEach(async () => {
+    dir = await makeTmpDir();
+    noteStore = new NoteStore(dir);
+    searchIndex = new SearchIndex();
+    await noteStore.initialize();
+    server = createMcpServer(noteStore, searchIndex, dir);
+  });
+
+  afterEach(async () => {
+    await noteStore.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  // Helper: invoke a registered tool's handler directly.
+  // The MCP SDK exposes registered tools at server._registeredTools[name].
+  function getTool(name: string) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const reg = (server as any)._registeredTools[name];
+    if (!reg) throw new Error(`tool not registered: ${name}`);
+    return reg;
+  }
+
+  test('create_note accepts frontmatter param and writes extras to YAML', async () => {
+    const tool = getTool('create_note');
+    const res = await tool.handler({
+      title: 'Scoped Doc',
+      content: 'body',
+      path: 'projects/x/scoped-doc',
+      frontmatter: { status: 'shaping', priority: 2 },
+    });
+    expect(res.isError).toBeFalsy();
+    const raw = await fs.readFile(path.join(dir, 'projects/x/scoped-doc.md'), 'utf-8');
+    expect(raw).toMatch(/status:\s*shaping/);
+    expect(raw).toMatch(/priority:\s*2/);
+  });
+
+  test('update_note accepts explicit frontmatter param', async () => {
+    await noteStore.upsert({ slug: 'doc', title: 'Doc', content: 'v1' });
+    const tool = getTool('update_note');
+    const res = await tool.handler({
+      slug: 'doc',
+      title: 'Doc',
+      content: 'v2',
+      frontmatter: { status: 'tracked' },
+    });
+    expect(res.isError).toBeFalsy();
+    const note = await noteStore.get('doc');
+    expect(note!.frontmatter.status).toBe('tracked');
+  });
+
+  test('update_note round-trips status via embedded content (get → modify body → update)', async () => {
+    // Seed a note with status via the create path.
+    await noteStore.upsert({
+      slug: 'doc',
+      title: 'Doc',
+      content: 'v1',
+      frontmatter: { status: 'shaping' },
+    });
+    // Caller does get_note then update_note(slug, content) with the raw markdown.
+    const got = await noteStore.get('doc');
+    const updateTool = getTool('update_note');
+    const res = await updateTool.handler({
+      slug: 'doc',
+      content: got!.raw, // raw includes the frontmatter block
+      // No title, tags, related, or frontmatter param — pure round-trip.
+    });
+    expect(res.isError).toBeFalsy();
+    const after = await noteStore.get('doc');
+    expect(after!.frontmatter.status).toBe('shaping');
+    expect(after!.frontmatter.title).toBe('Doc');
+  });
+
+  test('update_note: updated: field round-trips via embedded content', async () => {
+    // updated is intentionally NOT on the denylist — it flows through as an extra.
+    await noteStore.upsert({
+      slug: 'doc',
+      title: 'Doc',
+      content: 'v1',
+      frontmatter: { updated: '2026-05-09' },
+    });
+    const got = await noteStore.get('doc');
+    const updateTool = getTool('update_note');
+    await updateTool.handler({ slug: 'doc', content: got!.raw });
+    const after = await noteStore.get('doc');
+    expect(after!.frontmatter.updated).toBe('2026-05-09');
+  });
+
+  test('create_note: explicit frontmatter param with title raises denylist error', async () => {
+    const tool = getTool('create_note');
+    const res = await tool.handler({
+      title: 'Real Title',
+      content: 'body',
+      path: 'projects/x/y',
+      frontmatter: { title: 'Sneaky' },
+    });
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toBe(`Cannot set 'title' via frontmatter; use the typed param.`);
+  });
+
+  test.each(['title', 'date', 'tags', 'related'])(
+    'update_note: explicit frontmatter param with %s raises denylist error',
+    async (key) => {
+      await noteStore.upsert({ slug: 'doc', title: 'Doc', content: 'v1' });
+      const tool = getTool('update_note');
+      const res = await tool.handler({
+        slug: 'doc',
+        title: 'Doc',
+        content: 'v2',
+        frontmatter: { [key]: 'value' },
+      });
+      expect(res.isError).toBe(true);
+      expect(res.content[0].text).toBe(`Cannot set '${key}' via frontmatter; use the typed param.`);
+    },
+  );
+
+  test('search and list still surface notes that have frontmatter extras', async () => {
+    await noteStore.upsert({
+      slug: 'projects/x/with-extras',
+      title: 'With Extras',
+      content: 'distinctkeyword body',
+      tags: ['a'],
+      frontmatter: { status: 'shaping' },
+    });
+    // Rebuild the index the way create/update handlers do.
+    const allNotes = await noteStore.listWithContent();
+    searchIndex.buildIndexWithContent(allNotes);
+
+    const listTool = getTool('list_notes');
+    const listRes = await listTool.handler({});
+    expect(listRes.isError).toBeFalsy();
+    const listed = JSON.parse(listRes.content[0].text);
+    expect(listed.find((n: { slug: string }) => n.slug === 'projects/x/with-extras')).toBeDefined();
+
+    const searchTool = getTool('search_notes');
+    const searchRes = await searchTool.handler({ query: 'distinctkeyword' });
+    expect(searchRes.isError).toBeFalsy();
+    const found = JSON.parse(searchRes.content[0].text);
+    expect(found.some((r: { slug: string }) => r.slug === 'projects/x/with-extras')).toBe(true);
   });
 });

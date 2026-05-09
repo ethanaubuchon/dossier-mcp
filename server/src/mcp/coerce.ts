@@ -1,6 +1,15 @@
 import matter from 'gray-matter';
 
-type ResolvedParams = { ok: true; title: string; content: string; tags?: string[]; related?: string[] };
+export const FRONTMATTER_DENYLIST = new Set(['title', 'date', 'tags', 'related']);
+
+type ResolvedParams = {
+  ok: true;
+  title: string;
+  content: string;
+  tags?: string[];
+  related?: string[];
+  frontmatter?: Record<string, unknown>;
+};
 type ResolveFailed = { ok: false; error: string };
 
 /**
@@ -12,14 +21,30 @@ type ResolveFailed = { ok: false; error: string };
  * it extracts title/tags/related from frontmatter in content and strips the frontmatter
  * from the body whenever frontmatter is present. Explicit params always take precedence
  * over frontmatter values.
+ *
+ * Non-typed frontmatter keys (anything outside title/date/tags/related) are routed into
+ * the resolved `frontmatter` map. The explicit `frontmatter` param overrides extracted
+ * values on key collision. The four typed names are denylisted on the explicit param
+ * (first-fail, named key) — extracted typed-named keys are not denylisted because they
+ * flow through their own typed-extraction paths.
  */
 export function resolveFrontmatterParams(params: {
   title: string | undefined;
   content: string;
   tags: string[] | undefined;
   related: string[] | undefined;
+  frontmatter: Record<string, unknown> | undefined;
 }): ResolvedParams | ResolveFailed {
-  const { tags, related } = params;
+  const { tags, related, frontmatter: explicitFrontmatter } = params;
+
+  // Denylist check on the explicit frontmatter param (first-fail).
+  if (explicitFrontmatter) {
+    for (const key of Object.keys(explicitFrontmatter)) {
+      if (FRONTMATTER_DENYLIST.has(key)) {
+        return { ok: false, error: `Cannot set '${key}' via frontmatter; use the typed param.` };
+      }
+    }
+  }
 
   let parsed: matter.GrayMatterFile<string>;
   try {
@@ -44,7 +69,31 @@ export function resolveFrontmatterParams(params: {
   const resolvedTags = tags ?? (hasFrontmatter ? coerceStringArray(parsed.data.tags) : undefined);
   const resolvedRelated = related ?? (hasFrontmatter ? coerceStringArray(parsed.data.related) : undefined);
 
-  return { ok: true, title, content, tags: resolvedTags, related: resolvedRelated };
+  // Extract non-typed extras from embedded content. Typed-named keys are
+  // dropped here (they flow through their own extraction paths above).
+  const extractedExtras: Record<string, unknown> = {};
+  if (hasFrontmatter) {
+    for (const [key, value] of Object.entries(parsed.data)) {
+      if (!FRONTMATTER_DENYLIST.has(key)) {
+        extractedExtras[key] = value;
+      }
+    }
+  }
+
+  // Merge: extracted < explicit. Returns undefined when both are empty so
+  // upsert's "preserve existing extras" branch isn't disturbed by an empty
+  // overlay object.
+  const merged: Record<string, unknown> = { ...extractedExtras, ...(explicitFrontmatter ?? {}) };
+  const resolvedFrontmatter = Object.keys(merged).length > 0 ? merged : undefined;
+
+  return {
+    ok: true,
+    title,
+    content,
+    tags: resolvedTags,
+    related: resolvedRelated,
+    frontmatter: resolvedFrontmatter,
+  };
 }
 
 /**

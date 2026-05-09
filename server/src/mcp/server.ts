@@ -4,7 +4,7 @@ import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mc
 import { z } from 'zod';
 import { NoteStore } from '../notes/NoteStore.js';
 import { SearchIndex } from '../search/SearchIndex.js';
-import { coerceStringArray, resolveFrontmatterParams } from './coerce.js';
+import { coerceStringArray, resolveFrontmatterParams, FRONTMATTER_DENYLIST } from './coerce.js';
 import { extractTodos } from '../notes/todos.js';
 
 export async function vaultContextHandler(notesDir: string) {
@@ -111,10 +111,26 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
       path: z.string().optional().describe('Vault-relative path for the note slug (e.g. "projects/startup/my-note"). Defaults to inbox/<title-slug>.'),
       tags: z.preprocess(coerceStringArray, z.array(z.string()).optional()).describe('Tags to categorize the note'),
       related: z.preprocess(coerceStringArray, z.array(z.string()).optional()).describe('Slugs of related notes'),
+      frontmatter: z.record(z.string(), z.unknown()).optional().describe(
+        'Additional YAML frontmatter fields to write (e.g. {status: "shaping"}). ' +
+        'Cannot set tool-managed fields (title, date, tags, related) — use the typed params for those.'
+      ),
     },
-    async ({ title, content, path: notePath, tags, related }) => {
+    async ({ title, content, path: notePath, tags, related, frontmatter }) => {
       const slug = notePath ?? ('inbox/' + NoteStore.makeSlug(title));
       if (!isValidSlug(slug)) return slugValidationError(slug);
+
+      // Denylist check on the explicit frontmatter param (first-fail, named key).
+      if (frontmatter) {
+        for (const key of Object.keys(frontmatter)) {
+          if (FRONTMATTER_DENYLIST.has(key)) {
+            return {
+              isError: true,
+              content: [{ type: 'text', text: `Cannot set '${key}' via frontmatter; use the typed param.` }],
+            };
+          }
+        }
+      }
 
       let note;
       try {
@@ -125,7 +141,7 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
             content: [{ type: 'text', text: `Note already exists at "${slug}" — use update_note to modify it.` }],
           };
         }
-        note = await noteStore.upsert({ slug, title, content, tags, related });
+        note = await noteStore.upsert({ slug, title, content, tags, related, frontmatter });
         const allNotes = await noteStore.listWithContent();
         searchIndex.buildIndexWithContent(allNotes);
       } catch (e) {
@@ -143,15 +159,20 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
     'Update an existing note. Pass the slug to identify which note to update. ' +
     'title, tags, and related can be passed as separate params or embedded as frontmatter in content — ' +
     'useful when passing back output from get_note directly. Explicit params take precedence over frontmatter values. ' +
-    'Omit tags or related (or pass an empty array) to preserve existing values; pass a non-empty array to replace them.',
+    'Omit tags or related (or pass an empty array) to preserve existing values; pass a non-empty array to replace them. ' +
+    'Non-tool-managed frontmatter fields (e.g. status) embedded in content are preserved on round-trip update.',
     {
       slug: z.string().describe('The slug of the note to update'),
       title: z.string().optional().describe('New title for the note. Can also be supplied via frontmatter in content.'),
       content: z.string().describe('New markdown content for the note body (frontmatter will be extracted if present)'),
       tags: z.preprocess(coerceStringArray, z.array(z.string()).optional()).describe('Updated tags'),
       related: z.preprocess(coerceStringArray, z.array(z.string()).optional()).describe('Updated related note slugs'),
+      frontmatter: z.record(z.string(), z.unknown()).optional().describe(
+        'Additional YAML frontmatter fields to write (e.g. {status: "shaping"}). ' +
+        'Cannot set tool-managed fields (title, date, tags, related) — use the typed params for those.'
+      ),
     },
-    async ({ slug, title, content, tags, related }) => {
+    async ({ slug, title, content, tags, related, frontmatter }) => {
       if (!isValidSlug(slug)) return slugValidationError(slug);
       let note;
       try {
@@ -162,11 +183,18 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
             isError: true,
           };
         }
-        const resolved = resolveFrontmatterParams({ title, content, tags, related });
+        const resolved = resolveFrontmatterParams({ title, content, tags, related, frontmatter });
         if (!resolved.ok) {
           return { isError: true, content: [{ type: 'text', text: resolved.error }] };
         }
-        note = await noteStore.upsert({ slug, title: resolved.title, content: resolved.content, tags: resolved.tags, related: resolved.related });
+        note = await noteStore.upsert({
+          slug,
+          title: resolved.title,
+          content: resolved.content,
+          tags: resolved.tags,
+          related: resolved.related,
+          frontmatter: resolved.frontmatter,
+        });
         const allNotes = await noteStore.listWithContent();
         searchIndex.buildIndexWithContent(allNotes);
       } catch (e) {
