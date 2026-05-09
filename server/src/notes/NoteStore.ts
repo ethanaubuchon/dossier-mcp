@@ -210,13 +210,20 @@ export class NoteStore extends EventEmitter {
     tags?: string[];
     related?: string[];
     slug?: string;
+    frontmatter?: Record<string, unknown>;
   }): Promise<Note> {
     const slug = data.slug || NoteStore.makeSlug(data.title);
     const date = new Date().toISOString().split('T')[0];
 
-    // Merge with existing note if it exists
+    // Merge with existing note if it exists. Layer order:
+    //   1. Existing non-typed extras (so keys absent from this call survive).
+    //   2. Caller's `frontmatter` param (overrides existing on key collision).
+    //   3. Typed fields override (title/date/tags/related).
     const existing = await this.get(slug);
+    const existingExtras = pickFrontmatterExtras(existing?.frontmatter);
     const frontmatter: NoteFrontmatter = {
+      ...existingExtras,
+      ...(data.frontmatter ?? {}),
       title: data.title,
       date: existing?.frontmatter.date || date,
       tags: data.tags ?? existing?.frontmatter.tags ?? [],
@@ -443,4 +450,13 @@ export class NoteStore extends EventEmitter {
       related: Array.isArray(data.related) ? data.related.map(String) : [],
     };
   }
+}
+
+// Returns frontmatter without the typed fields. Used by upsert to layer
+// existing non-typed extras under a caller's frontmatter param.
+function pickFrontmatterExtras(fm: NoteFrontmatter | undefined): Record<string, unknown> {
+  if (!fm) return {};
+  const { title, date, tags, related, ...extras } = fm;
+  void title; void date; void tags; void related;
+  return extras;
 }

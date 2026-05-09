@@ -874,4 +874,81 @@ body
     // Extra survives even when typed fields are odd
     expect(note!.frontmatter.status).toBe('ok');
   });
+
+  test('upsert with frontmatter param writes extras to YAML on disk', async () => {
+    await store.upsert({
+      title: 'With Status',
+      content: 'body',
+      frontmatter: { status: 'shaping', priority: 1 },
+    });
+    const raw = await fs.readFile(path.join(dir, 'with-status.md'), 'utf-8');
+    expect(raw).toMatch(/status:\s*shaping/);
+    expect(raw).toMatch(/priority:\s*1/);
+  });
+
+  test('upsert preserves existing extras when frontmatter param is omitted', async () => {
+    await store.upsert({
+      title: 'Doc',
+      content: 'v1',
+      frontmatter: { status: 'shaping', author: 'me' },
+    });
+    // Re-upsert without frontmatter — existing extras must survive.
+    await store.upsert({ slug: 'doc', title: 'Doc', content: 'v2' });
+    const note = await store.get('doc');
+    expect(note!.frontmatter.status).toBe('shaping');
+    expect(note!.frontmatter.author).toBe('me');
+    expect(note!.content.trim()).toBe('v2');
+  });
+
+  test('upsert frontmatter param overrides existing extras on key collision (last-write-wins)', async () => {
+    await store.upsert({
+      title: 'Doc',
+      content: 'v1',
+      frontmatter: { status: 'shaping', priority: 1 },
+    });
+    await store.upsert({
+      slug: 'doc',
+      title: 'Doc',
+      content: 'v2',
+      frontmatter: { status: 'tracked' }, // priority absent → preserved
+    });
+    const note = await store.get('doc');
+    expect(note!.frontmatter.status).toBe('tracked');
+    expect(note!.frontmatter.priority).toBe(1);
+  });
+
+  test('upsert frontmatter param accepts varied YAML-serializable types', async () => {
+    await store.upsert({
+      title: 'Mixed Types',
+      content: 'body',
+      frontmatter: {
+        str: 'hello',
+        num: 42,
+        bool: true,
+        arr: ['x', 'y'],
+        obj: { nested: 'val' },
+      },
+    });
+    const note = await store.get('mixed-types');
+    expect(note!.frontmatter.str).toBe('hello');
+    expect(note!.frontmatter.num).toBe(42);
+    expect(note!.frontmatter.bool).toBe(true);
+    expect(note!.frontmatter.arr).toEqual(['x', 'y']);
+    expect(note!.frontmatter.obj).toEqual({ nested: 'val' });
+  });
+
+  test('upsert typed params still override their corresponding frontmatter fields', async () => {
+    // tags via typed param wins even if upsert is given a frontmatter map.
+    // (Denylist is enforced at the MCP boundary; upsert itself is permissive
+    // for internal callers — tags here is not a denylist test, just merge precedence.)
+    await store.upsert({
+      title: 'Doc',
+      content: 'v1',
+      tags: ['typed-tag'],
+      frontmatter: { status: 'shaping' },
+    });
+    const note = await store.get('doc');
+    expect(note!.frontmatter.tags).toEqual(['typed-tag']);
+    expect(note!.frontmatter.status).toBe('shaping');
+  });
 });
