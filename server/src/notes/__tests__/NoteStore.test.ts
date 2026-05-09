@@ -875,6 +875,36 @@ body
     expect(note!.frontmatter.status).toBe('ok');
   });
 
+  test('parseFrontmatter coerces non-typed YAML date scalars to ISO date strings', async () => {
+    // gray-matter parses unquoted YAML date scalars as JS Date objects.
+    // Non-typed extras must be coerced to ISO date strings on read so the
+    // value (not just the meaning) round-trips cleanly through matter.stringify
+    // — without this, `updated: 2020-05-01` would mutate to a full ISO timestamp
+    // (`2020-05-01T00:00:00.000Z`) on every read→write cycle.
+    await fs.writeFile(
+      path.join(dir, 'extra-dates.md'),
+      `---
+title: Extra Dates
+date: '2026-05-09'
+tags: []
+related: []
+updated: 2020-05-01
+published: 2019-12-31
+---
+body
+`,
+    );
+    const note = await store.get('extra-dates');
+    expect(note!.frontmatter.updated).toBe('2020-05-01');
+    expect(note!.frontmatter.published).toBe('2019-12-31');
+    // Round-trip: re-upsert and verify the YAML stays clean (no ISO timestamps).
+    await store.upsert({ slug: 'extra-dates', title: 'Extra Dates', content: note!.content });
+    const raw = await fs.readFile(path.join(dir, 'extra-dates.md'), 'utf-8');
+    expect(raw).toContain('updated:');
+    expect(raw).toContain('published:');
+    expect(raw).not.toMatch(/T\d{2}:\d{2}:\d{2}/);
+  });
+
   test('upsert with frontmatter param writes extras to YAML on disk', async () => {
     await store.upsert({
       title: 'With Status',

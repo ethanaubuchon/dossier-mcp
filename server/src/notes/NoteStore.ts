@@ -442,8 +442,17 @@ export class NoteStore extends EventEmitter {
     // Spread unknown fields first, then overlay validated typed fields so they
     // win on key collision. Open-ended YAML round-trips intact for any non-typed
     // key (status, priority, etc.).
+    //
+    // Coerce any non-typed Date values to ISO date strings (YYYY-MM-DD) so
+    // gray-matter's parse-as-Date behavior for unquoted YAML date scalars
+    // doesn't cause matter.stringify to round-trip them as full ISO timestamps
+    // (e.g. `updated: 2020-05-01` would otherwise become `2020-05-01T00:00:00.000Z`).
+    const normalized: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(data)) {
+      normalized[key] = value instanceof Date ? value.toISOString().split('T')[0] : value;
+    }
     return {
-      ...data,
+      ...normalized,
       title: String(data.title || 'Untitled'),
       date,
       tags: Array.isArray(data.tags) ? data.tags.map(String) : [],
