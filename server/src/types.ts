@@ -3,6 +3,7 @@ export interface NoteFrontmatter {
   date: string;
   tags: string[];
   related: string[];
+  [key: string]: unknown;
 }
 
 export interface Note {

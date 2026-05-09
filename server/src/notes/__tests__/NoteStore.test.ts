@@ -826,4 +826,205 @@ describe('NoteStore', () => {
       await changed;
     }, 6000);
   });
+
+  test('parseFrontmatter preserves non-typed fields on read', async () => {
+    await fs.writeFile(
+      path.join(dir, 'extras.md'),
+      `---
+title: Has Extras
+date: '2026-05-09'
+tags: [a]
+related: []
+status: shaping
+priority: 3
+flagged: true
+---
+body
+`,
+    );
+    const note = await store.get('extras');
+    expect(note).not.toBeNull();
+    expect(note!.frontmatter.status).toBe('shaping');
+    expect(note!.frontmatter.priority).toBe(3);
+    expect(note!.frontmatter.flagged).toBe(true);
+    // Existing typed accesses still work
+    expect(note!.frontmatter.title).toBe('Has Extras');
+    expect(note!.frontmatter.tags).toEqual(['a']);
+  });
+
+  test('parseFrontmatter still validates and coerces typed fields', async () => {
+    // Non-ISO date falls back to today; missing title falls back to "Untitled"
+    await fs.writeFile(
+      path.join(dir, 'odd.md'),
+      `---
+date: not-a-date
+tags: bad
+related: []
+status: ok
+---
+body
+`,
+    );
+    const note = await store.get('odd');
+    expect(note!.frontmatter.title).toBe('Untitled');
+    // Non-array tags coerce to []
+    expect(note!.frontmatter.tags).toEqual([]);
+    // Non-ISO date falls back to today (just verify it's an ISO date string)
+    expect(note!.frontmatter.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    // Extra survives even when typed fields are odd
+    expect(note!.frontmatter.status).toBe('ok');
+  });
+
+  test('parseFrontmatter coerces non-typed YAML date scalars to ISO date strings', async () => {
+    // gray-matter parses unquoted YAML date scalars as JS Date objects.
+    // Non-typed extras must be coerced to ISO date strings on read so the
+    // value (not just the meaning) round-trips cleanly through matter.stringify
+    // — without this, `updated: 2020-05-01` would mutate to a full ISO timestamp
+    // (`2020-05-01T00:00:00.000Z`) on every read→write cycle.
+    await fs.writeFile(
+      path.join(dir, 'extra-dates.md'),
+      `---
+title: Extra Dates
+date: '2026-05-09'
+tags: []
+related: []
+updated: 2020-05-01
+published: 2019-12-31
+---
+body
+`,
+    );
+    const note = await store.get('extra-dates');
+    expect(note!.frontmatter.updated).toBe('2020-05-01');
+    expect(note!.frontmatter.published).toBe('2019-12-31');
+    // Round-trip: re-upsert and verify the YAML stays clean (no ISO timestamps).
+    await store.upsert({ slug: 'extra-dates', title: 'Extra Dates', content: note!.content });
+    const raw = await fs.readFile(path.join(dir, 'extra-dates.md'), 'utf-8');
+    expect(raw).toContain('updated:');
+    expect(raw).toContain('published:');
+    expect(raw).not.toMatch(/T\d{2}:\d{2}:\d{2}/);
+  });
+
+  test('upsert with frontmatter param writes extras to YAML on disk', async () => {
+    await store.upsert({
+      title: 'With Status',
+      content: 'body',
+      frontmatter: { status: 'shaping', priority: 1 },
+    });
+    const raw = await fs.readFile(path.join(dir, 'with-status.md'), 'utf-8');
+    expect(raw).toMatch(/status:\s*shaping/);
+    expect(raw).toMatch(/priority:\s*1/);
+  });
+
+  test('upsert preserves existing extras when frontmatter param is omitted', async () => {
+    await store.upsert({
+      title: 'Doc',
+      content: 'v1',
+      frontmatter: { status: 'shaping', author: 'me' },
+    });
+    // Re-upsert without frontmatter — existing extras must survive.
+    await store.upsert({ slug: 'doc', title: 'Doc', content: 'v2' });
+    const note = await store.get('doc');
+    expect(note!.frontmatter.status).toBe('shaping');
+    expect(note!.frontmatter.author).toBe('me');
+    expect(note!.content.trim()).toBe('v2');
+  });
+
+  test('upsert frontmatter param overrides existing extras on key collision (last-write-wins)', async () => {
+    await store.upsert({
+      title: 'Doc',
+      content: 'v1',
+      frontmatter: { status: 'shaping', priority: 1 },
+    });
+    await store.upsert({
+      slug: 'doc',
+      title: 'Doc',
+      content: 'v2',
+      frontmatter: { status: 'tracked' }, // priority absent → preserved
+    });
+    const note = await store.get('doc');
+    expect(note!.frontmatter.status).toBe('tracked');
+    expect(note!.frontmatter.priority).toBe(1);
+  });
+
+  test('upsert frontmatter param keeps primitives, drops arrays and nested objects', async () => {
+    await store.upsert({
+      title: 'Mixed Types',
+      content: 'body',
+      frontmatter: {
+        str: 'hello',
+        num: 42,
+        bool: true,
+        arr: ['x', 'y'],
+        obj: { nested: 'val' },
+      },
+    });
+    const note = await store.get('mixed-types');
+    expect(note!.frontmatter.str).toBe('hello');
+    expect(note!.frontmatter.num).toBe(42);
+    expect(note!.frontmatter.bool).toBe(true);
+    // Arrays and nested objects are intentionally dropped — extras are flat by
+    // contract. See normalizeFrontmatterExtras in NoteStore.ts.
+    expect(note!.frontmatter.arr).toBeUndefined();
+    expect(note!.frontmatter.obj).toBeUndefined();
+    // YAML on disk should also be free of them.
+    const raw = await fs.readFile(path.join(dir, 'mixed-types.md'), 'utf-8');
+    expect(raw).not.toContain('arr:');
+    expect(raw).not.toContain('obj:');
+    expect(raw).not.toContain('nested:');
+  });
+
+  test('parseFrontmatter drops nested arrays and objects on read (extras must be flat)', async () => {
+    await fs.writeFile(
+      path.join(dir, 'nested.md'),
+      `---
+title: Nested
+date: '2026-05-09'
+tags: []
+related: []
+status: shaping
+list_extras: [a, b, c]
+date_list: [2020-01-01, 2020-02-02]
+meta:
+  author: someone
+  created: 2020-01-01
+---
+body
+`,
+    );
+    const note = await store.get('nested');
+    // Primitives + Date scalars survive.
+    expect(note!.frontmatter.status).toBe('shaping');
+    // Nested containers are stripped — including the array-of-Dates and
+    // nested-object-with-Date paths gray-matter would otherwise round-trip
+    // as full ISO timestamps via matter.stringify.
+    expect(note!.frontmatter.list_extras).toBeUndefined();
+    expect(note!.frontmatter.date_list).toBeUndefined();
+    expect(note!.frontmatter.meta).toBeUndefined();
+
+    // Round-trip: re-upsert and verify the YAML is clean (no nested fields,
+    // no ISO timestamp leakage).
+    await store.upsert({ slug: 'nested', title: 'Nested', content: note!.content });
+    const raw = await fs.readFile(path.join(dir, 'nested.md'), 'utf-8');
+    expect(raw).toMatch(/status:\s*shaping/);
+    expect(raw).not.toContain('list_extras');
+    expect(raw).not.toContain('date_list');
+    expect(raw).not.toContain('meta:');
+    expect(raw).not.toMatch(/T\d{2}:\d{2}:\d{2}/);
+  });
+
+  test('upsert typed params still override their corresponding frontmatter fields', async () => {
+    // tags via typed param wins even if upsert is given a frontmatter map.
+    // (Denylist is enforced at the MCP boundary; upsert itself is permissive
+    // for internal callers — tags here is not a denylist test, just merge precedence.)
+    await store.upsert({
+      title: 'Doc',
+      content: 'v1',
+      tags: ['typed-tag'],
+      frontmatter: { status: 'shaping' },
+    });
+    const note = await store.get('doc');
+    expect(note!.frontmatter.tags).toEqual(['typed-tag']);
+    expect(note!.frontmatter.status).toBe('shaping');
+  });
 });
