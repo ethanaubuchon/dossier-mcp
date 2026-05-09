@@ -947,7 +947,7 @@ body
     expect(note!.frontmatter.priority).toBe(1);
   });
 
-  test('upsert frontmatter param accepts varied YAML-serializable types', async () => {
+  test('upsert frontmatter param keeps primitives, drops arrays and nested objects', async () => {
     await store.upsert({
       title: 'Mixed Types',
       content: 'body',
@@ -963,8 +963,54 @@ body
     expect(note!.frontmatter.str).toBe('hello');
     expect(note!.frontmatter.num).toBe(42);
     expect(note!.frontmatter.bool).toBe(true);
-    expect(note!.frontmatter.arr).toEqual(['x', 'y']);
-    expect(note!.frontmatter.obj).toEqual({ nested: 'val' });
+    // Arrays and nested objects are intentionally dropped — extras are flat by
+    // contract. See normalizeFrontmatterExtras in NoteStore.ts.
+    expect(note!.frontmatter.arr).toBeUndefined();
+    expect(note!.frontmatter.obj).toBeUndefined();
+    // YAML on disk should also be free of them.
+    const raw = await fs.readFile(path.join(dir, 'mixed-types.md'), 'utf-8');
+    expect(raw).not.toContain('arr:');
+    expect(raw).not.toContain('obj:');
+    expect(raw).not.toContain('nested:');
+  });
+
+  test('parseFrontmatter drops nested arrays and objects on read (extras must be flat)', async () => {
+    await fs.writeFile(
+      path.join(dir, 'nested.md'),
+      `---
+title: Nested
+date: '2026-05-09'
+tags: []
+related: []
+status: shaping
+list_extras: [a, b, c]
+date_list: [2020-01-01, 2020-02-02]
+meta:
+  author: someone
+  created: 2020-01-01
+---
+body
+`,
+    );
+    const note = await store.get('nested');
+    // Primitives + Date scalars survive.
+    expect(note!.frontmatter.status).toBe('shaping');
+    // Nested containers are stripped — including the array-of-Dates and
+    // nested-object-with-Date paths gray-matter would otherwise round-trip
+    // as full ISO timestamps via matter.stringify.
+    expect(note!.frontmatter.list_extras).toBeUndefined();
+    expect(note!.frontmatter.date_list).toBeUndefined();
+    expect(note!.frontmatter.meta).toBeUndefined();
+
+    // Round-trip: re-upsert and verify the YAML is clean (no nested fields,
+    // no ISO timestamp leakage).
+    await store.upsert({ slug: 'nested', title: 'Nested', content: note!.content });
+    const raw = await fs.readFile(path.join(dir, 'nested.md'), 'utf-8');
+    expect(raw).toMatch(/status:\s*shaping/);
+    expect(raw).not.toContain('list_extras');
+    expect(raw).not.toContain('date_list');
+    expect(raw).not.toContain('meta:');
+    expect(raw).not.toMatch(/T\d{2}:\d{2}:\d{2}/);
   });
 
   test('upsert typed params still override their corresponding frontmatter fields', async () => {

@@ -217,13 +217,16 @@ export class NoteStore extends EventEmitter {
 
     // Merge with existing note if it exists. Layer order:
     //   1. Existing non-typed extras (so keys absent from this call survive).
-    //   2. Caller's `frontmatter` param (overrides existing on key collision).
+    //      Already normalized via parseFrontmatter on the read path.
+    //   2. Caller's `frontmatter` param, normalized here to drop arrays/objects
+    //      and coerce Date values consistent with the read path.
     //   3. Typed fields override (title/date/tags/related).
     const existing = await this.get(slug);
     const existingExtras = pickFrontmatterExtras(existing?.frontmatter);
+    const callerExtras = data.frontmatter ? normalizeFrontmatterExtras(data.frontmatter) : {};
     const frontmatter: NoteFrontmatter = {
       ...existingExtras,
-      ...(data.frontmatter ?? {}),
+      ...callerExtras,
       title: data.title,
       date: existing?.frontmatter.date || date,
       tags: data.tags ?? existing?.frontmatter.tags ?? [],
@@ -439,20 +442,15 @@ export class NoteStore extends EventEmitter {
         ? rawDate
         : new Date().toISOString().split('T')[0];
     }
-    // Spread unknown fields first, then overlay validated typed fields so they
-    // win on key collision. Open-ended YAML round-trips intact for any non-typed
-    // key (status, priority, etc.).
-    //
-    // Coerce any non-typed Date values to ISO date strings (YYYY-MM-DD) so
-    // gray-matter's parse-as-Date behavior for unquoted YAML date scalars
-    // doesn't cause matter.stringify to round-trip them as full ISO timestamps
-    // (e.g. `updated: 2020-05-01` would otherwise become `2020-05-01T00:00:00.000Z`).
-    const normalized: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(data)) {
-      normalized[key] = value instanceof Date ? value.toISOString().split('T')[0] : value;
-    }
+    // Spread normalized non-typed fields first, then overlay validated typed
+    // fields so they win on key collision. Frontmatter extras are flat by
+    // contract: primitives and Date scalars only — arrays and nested objects
+    // are dropped (no current use case, and they multiply the read/merge
+    // complexity). Date values coerce to YYYY-MM-DD strings so gray-matter's
+    // parse-as-Date behavior for unquoted YAML date scalars doesn't make
+    // matter.stringify emit them as full ISO timestamps on round-trip.
     return {
-      ...normalized,
+      ...normalizeFrontmatterExtras(data),
       title: String(data.title || 'Untitled'),
       date,
       tags: Array.isArray(data.tags) ? data.tags.map(String) : [],
@@ -468,4 +466,27 @@ function pickFrontmatterExtras(fm: NoteFrontmatter | undefined): Record<string, 
   const { title, date, tags, related, ...extras } = fm;
   void title; void date; void tags; void related;
   return extras;
+}
+
+// Normalizes a frontmatter-shaped record so values are flat and string-friendly:
+// Date scalars become YYYY-MM-DD strings (gray-matter parses unquoted YAML dates
+// as JS Date objects, which matter.stringify would otherwise re-emit as full
+// ISO timestamps); arrays and nested objects are dropped entirely.
+//
+// The flat-extras contract is intentional. Nested arrays/objects in frontmatter
+// extras have no current use case in the system and their interactions with
+// gray-matter (e.g. arrays of unquoted dates becoming arrays of Date objects)
+// would require recursive coercion to round-trip cleanly.
+function normalizeFrontmatterExtras(data: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(data)) {
+    if (value instanceof Date) {
+      out[key] = value.toISOString().split('T')[0];
+      continue;
+    }
+    if (Array.isArray(value)) continue;
+    if (typeof value === 'object' && value !== null) continue;
+    out[key] = value;
+  }
+  return out;
 }
