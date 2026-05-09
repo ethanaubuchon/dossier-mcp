@@ -826,4 +826,52 @@ describe('NoteStore', () => {
       await changed;
     }, 6000);
   });
+
+  test('parseFrontmatter preserves non-typed fields on read', async () => {
+    await fs.writeFile(
+      path.join(dir, 'extras.md'),
+      `---
+title: Has Extras
+date: '2026-05-09'
+tags: [a]
+related: []
+status: shaping
+priority: 3
+flagged: true
+---
+body
+`,
+    );
+    const note = await store.get('extras');
+    expect(note).not.toBeNull();
+    expect(note!.frontmatter.status).toBe('shaping');
+    expect(note!.frontmatter.priority).toBe(3);
+    expect(note!.frontmatter.flagged).toBe(true);
+    // Existing typed accesses still work
+    expect(note!.frontmatter.title).toBe('Has Extras');
+    expect(note!.frontmatter.tags).toEqual(['a']);
+  });
+
+  test('parseFrontmatter still validates and coerces typed fields', async () => {
+    // Non-ISO date falls back to today; missing title falls back to "Untitled"
+    await fs.writeFile(
+      path.join(dir, 'odd.md'),
+      `---
+date: not-a-date
+tags: bad
+related: []
+status: ok
+---
+body
+`,
+    );
+    const note = await store.get('odd');
+    expect(note!.frontmatter.title).toBe('Untitled');
+    // Non-array tags coerce to []
+    expect(note!.frontmatter.tags).toEqual([]);
+    // Non-ISO date falls back to today (just verify it's an ISO date string)
+    expect(note!.frontmatter.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    // Extra survives even when typed fields are odd
+    expect(note!.frontmatter.status).toBe('ok');
+  });
 });

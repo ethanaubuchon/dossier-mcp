@@ -432,7 +432,11 @@ export class NoteStore extends EventEmitter {
         ? rawDate
         : new Date().toISOString().split('T')[0];
     }
+    // Spread unknown fields first, then overlay validated typed fields so they
+    // win on key collision. Open-ended YAML round-trips intact for any non-typed
+    // key (status, priority, etc.).
     return {
+      ...data,
       title: String(data.title || 'Untitled'),
       date,
       tags: Array.isArray(data.tags) ? data.tags.map(String) : [],
