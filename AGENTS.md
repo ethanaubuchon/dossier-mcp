@@ -9,14 +9,14 @@
 
 ## Development Commands
 
-All commands run from `server/`.
+This repo uses **pnpm** (pinned via `packageManager` / Corepack). All commands run from `server/`.
 
 | Script | Purpose |
 |--------|---------|
-| `npm run dev` | Start Express server with hot reload |
-| `npm run mcp` | Start MCP server (stdio transport) |
-| `npm run build` | Compile TypeScript to `dist/` |
-| `npm run test` | Run Jest test suite |
+| `pnpm dev` | Start Express server with hot reload |
+| `pnpm mcp` | Start MCP server (stdio transport) |
+| `pnpm build` | Compile TypeScript to `dist/` |
+| `pnpm test` | Run Jest test suite |
 
 ## Key Gotchas
 
