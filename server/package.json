@@ -2,6 +2,7 @@
   "name": "dossier-mcp-server",
   "version": "1.0.0",
   "type": "module",
+  "packageManager": "pnpm@11.9.0",
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "mcp": "tsx src/mcp-entry.ts",
@@ -14,7 +15,8 @@
     "@modelcontextprotocol/sdk": "^1.12.0",
     "chokidar": "^4.0.0",
     "gray-matter": "^4.0.3",
-    "slugify": "^1.6.6"
+    "slugify": "^1.6.6",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/jest": "^29.5.12",

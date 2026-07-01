@@ -16,7 +16,7 @@ Context persists across sessions and projects — architectural decisions, ongoi
 
 ```bash
 cd server
-npm install
+pnpm install
 ```
 
 ## MCP Configuration
@@ -38,7 +38,7 @@ claude mcp add -s user dossier-mcp \
 Build first, then run the compiled output with plain `node`.
 
 ```bash
-cd server && npm run build
+cd server && pnpm build
 ```
 
 ```bash
@@ -125,6 +125,6 @@ MCP resources are read-only and can be enumerated by clients at startup, making 
 
 ```bash
 cd server
-npm test          # run tests
-npm run build     # compile TypeScript to dist/
+pnpm test         # run tests
+pnpm build        # compile TypeScript to dist/
 ```

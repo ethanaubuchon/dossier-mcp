@@ -11,3 +11,4 @@ client/dist/
 # TypeScript
 *.tsbuildinfo
 .worktrees/
+.claude/plans/

@@ -2,12 +2,13 @@
   "name": "dossier-mcp",
   "version": "1.0.0",
   "private": true,
+  "packageManager": "pnpm@11.9.0",
   "scripts": {
-    "dev": "npm run dev --prefix server",
-    "mcp": "npm run mcp --prefix server",
-    "test": "npm test --prefix server",
-    "build": "npm run build --prefix server",
-    "install:all": "npm install --prefix server"
+    "dev": "pnpm -C server dev",
+    "mcp": "pnpm -C server mcp",
+    "test": "pnpm -C server test",
+    "build": "pnpm -C server build",
+    "install:all": "pnpm -C server install"
   },
   "devDependencies": {
     "concurrently": "^10.0.3"
