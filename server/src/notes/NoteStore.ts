@@ -5,6 +5,7 @@ import slugifyLib from 'slugify';
 import chokidar, { type FSWatcher } from 'chokidar';
 import { EventEmitter } from 'events';
 import type { Note, NoteListItem, NoteFrontmatter } from '../types.js';
+import { updateWikiLinks } from './wikilinks.js';
 
 // slugify CJS/ESM compat: the callable may be the default export or the module itself
 const slugify = (slugifyLib as unknown as (text: string, options?: object) => string);
@@ -326,17 +327,18 @@ export class NoteStore extends EventEmitter {
       throw new Error(`Note "${oldSlug}" not found`);
     }
 
-    // 2. Self-ref preflight: if the source's own related[] references its old
-    //    slug, rewrite that one entry to the new slug before writing. We re-
-    //    stringify with gray-matter ONLY in this case so the verbatim raw
-    //    content path (preserving the user's exact YAML) holds for the common
-    //    case where there's no self-reference.
-    //
-    //    Trade-off: matter.stringify serializes frontmatter in JS object
-    //    property order, which may differ from the user's hand-edited field
-    //    order. Acceptable because (a) the rewrite path only fires for self-
-    //    referencing notes, (b) the alternative is leaving a dangling related
-    //    entry pointing at a deleted slug.
+    // 2. Update the moved note's own references to its old slug before writing.
+    //    - related[] self-ref → rewrite that entry and re-stringify frontmatter
+    //      via gray-matter (rewriting inline body links in the same pass).
+    //      matter.stringify emits keys in JS property order, which may differ
+    //      from the user's hand-edited order — accepted, since the alternative is
+    //      a dangling related entry and this path only fires for self-refs.
+    //    - otherwise → rewrite inline [[oldSlug]] self-links on the raw content so
+    //      the frontmatter block is preserved byte-for-byte (no reformat, no
+    //      flat-extras loss). A [[oldSlug]] inside a frontmatter string value is
+    //      rewritten too, which is correct — it's still a reference to this note.
+    //      With no self-links either, updateWikiLinks is a no-op: the verbatim
+    //      fast path.
     const oldPath = this.notePath(oldSlug);
     const newPath = this.notePath(newSlug);
     let content: string;
@@ -345,9 +347,12 @@ export class NoteStore extends EventEmitter {
         ...source.frontmatter,
         related: source.frontmatter.related.map((r) => (r === oldSlug ? newSlug : r)),
       };
-      content = matter.stringify(source.content, newFrontmatter as unknown as Record<string, unknown>);
+      content = matter.stringify(
+        updateWikiLinks(source.content, oldSlug, newSlug).content,
+        newFrontmatter as unknown as Record<string, unknown>,
+      );
     } else {
-      content = source.raw;
+      content = updateWikiLinks(source.raw, oldSlug, newSlug).content;
     }
 
     // 3. Atomic create-or-fail at the target via writeAtomically (write to
@@ -373,32 +378,48 @@ export class NoteStore extends EventEmitter {
     // 5. Prune empty parents at the old location.
     await this.pruneEmptyParents(oldPath);
 
-    // 6. Update references in other notes. The moved note's own self-ref was
-    //    already handled in step 2, so updateRelatedRefs's `entry.slug ===
-    //    newSlug` skip-guard is correct here.
-    const updatedRefs = await this.updateRelatedRefs(oldSlug, newSlug);
+    // 6. Update references in other notes — both `related` frontmatter and inline
+    //    [[oldSlug]] body links. The moved note's own refs/links were already
+    //    handled in step 2, so updateReferences's `entry.slug === newSlug`
+    //    skip-guard is correct here.
+    const updatedRefs = await this.updateReferences(oldSlug, newSlug);
 
     // 7. Return note at new location
     const note = await this.get(newSlug);
     return { note: note!, updatedRefs };
   }
 
-  private async updateRelatedRefs(oldSlug: string, newSlug: string): Promise<string[]> {
+  private async updateReferences(oldSlug: string, newSlug: string): Promise<string[]> {
     const updatedSlugs: string[] = [];
     const allNotes = await this.listWithContent();
     for (const entry of allNotes) {
-      if (entry.slug === newSlug) continue; // Skip the moved note itself to preserve its raw content
+      if (entry.slug === newSlug) continue; // Skip the moved note itself (handled in move step 2)
       if (entry.frontmatter.related.includes(oldSlug)) {
-        const newRelated = entry.frontmatter.related.map((r) => (r === oldSlug ? newSlug : r));
+        // A related[] field changes, so the frontmatter is re-stringified via
+        // upsert; rewrite inline body links in the same write.
         await this.upsert({
           slug: entry.slug,
           title: entry.frontmatter.title,
-          content: entry.content,
+          content: updateWikiLinks(entry.content, oldSlug, newSlug).content,
           tags: entry.frontmatter.tags,
-          related: newRelated,
+          related: entry.frontmatter.related.map((r) => (r === oldSlug ? newSlug : r)),
         });
         updatedSlugs.push(entry.slug);
+        continue;
       }
+      // Body-only change: rewrite inline [[oldSlug]] links on the raw content and
+      // write it back verbatim, so the note's frontmatter block (incl. any fields
+      // outside the flat-extras contract) is preserved exactly. Gate on the cheap
+      // body scan, then re-read for `raw` only when there's actually a link.
+      if (!updateWikiLinks(entry.content, oldSlug, newSlug).changed) continue;
+      const full = await this.get(entry.slug);
+      if (!full) continue;
+      await this.writeAtomically(
+        this.notePath(entry.slug),
+        updateWikiLinks(full.raw, oldSlug, newSlug).content,
+        { mode: 'overwrite' },
+      );
+      updatedSlugs.push(entry.slug);
     }
     return updatedSlugs;
   }

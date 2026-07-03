@@ -486,6 +486,157 @@ describe('NoteStore', () => {
       expect(result.updatedRefs).toEqual([]);
     });
 
+    test('move updates inline [[old-slug]] links in other notes\' bodies', async () => {
+      await store.upsert({ slug: 'target-note', title: 'Target', content: 'Body.' });
+      await store.upsert({ slug: 'referrer', title: 'Ref', content: 'See [[target-note]] and [[target-note|the target]].' });
+
+      const result = await store.move('target-note', 'new-location');
+
+      expect(result.updatedRefs).toContain('referrer');
+      const ref = await store.get('referrer');
+      expect(ref!.content.trim()).toBe('See [[new-location]] and [[new-location|the target]].');
+    });
+
+    test('move does not rewrite [[old-slug]] inside a fenced code block', async () => {
+      await store.upsert({ slug: 'target-note', title: 'Target', content: 'Body.' });
+      await store.upsert({
+        slug: 'referrer',
+        title: 'Ref',
+        content: 'real [[target-note]]\n\n```md\n[[target-note]]\n```',
+      });
+
+      await store.move('target-note', 'new-location');
+
+      const ref = await store.get('referrer');
+      expect(ref!.content).toContain('real [[new-location]]');
+      expect(ref!.content).toContain('```md\n[[target-note]]\n```');
+    });
+
+    test('move rewrites the moved note\'s own inline self-links', async () => {
+      await store.upsert({
+        slug: 'old-slug',
+        title: 'Self Link',
+        content: 'This note links to itself: [[old-slug]].',
+      });
+
+      const result = await store.move('old-slug', 'new-slug');
+
+      expect(result.note.content.trim()).toBe('This note links to itself: [[new-slug]].');
+      const persisted = await store.get('new-slug');
+      expect(persisted!.content.trim()).toBe('This note links to itself: [[new-slug]].');
+    });
+
+    test('move updates both related[] and inline links, counting the note once', async () => {
+      await store.upsert({ slug: 'target-note', title: 'Target', content: 'Body.' });
+      await store.upsert({
+        slug: 'referrer',
+        title: 'Ref',
+        content: 'Body mentions [[target-note]].',
+        related: ['target-note'],
+      });
+
+      const result = await store.move('target-note', 'new-location');
+
+      expect(result.updatedRefs.filter((s) => s === 'referrer')).toHaveLength(1);
+      const ref = await store.get('referrer');
+      expect(ref!.frontmatter.related).toEqual(['new-location']);
+      expect(ref!.content.trim()).toBe('Body mentions [[new-location]].');
+    });
+
+    test('move includes a note whose only change is an inline link in updatedRefs', async () => {
+      await store.upsert({ slug: 'target-note', title: 'Target', content: 'Body.' });
+      await store.upsert({ slug: 'link-only', title: 'LinkOnly', content: 'Here: [[target-note]].', related: ['unrelated'] });
+      await store.upsert({ slug: 'no-ref', title: 'NoRef', content: 'No links here.', related: ['unrelated'] });
+
+      const result = await store.move('target-note', 'new-location');
+
+      expect(result.updatedRefs).toContain('link-only');
+      expect(result.updatedRefs).not.toContain('no-ref');
+      // The non-referencing note's raw body is left untouched.
+      const noRef = await store.get('no-ref');
+      expect(noRef!.content.trim()).toBe('No links here.');
+    });
+
+    test('move updates inline links in multiple distinct referrers', async () => {
+      await store.upsert({ slug: 'target-note', title: 'Target', content: 'Body.' });
+      await store.upsert({ slug: 'ref-a', title: 'A', content: 'A links [[target-note]].' });
+      await store.upsert({ slug: 'ref-b', title: 'B', content: 'B links [[target-note]] too.' });
+
+      const result = await store.move('target-note', 'new-location');
+
+      expect(result.updatedRefs).toEqual(expect.arrayContaining(['ref-a', 'ref-b']));
+      expect((await store.get('ref-a'))!.content.trim()).toBe('A links [[new-location]].');
+      expect((await store.get('ref-b'))!.content.trim()).toBe('B links [[new-location]] too.');
+    });
+
+    test('move rewrites both the moved note\'s self related[] and its inline self-link', async () => {
+      await store.upsert({
+        slug: 'old-slug',
+        title: 'Both',
+        content: 'Self link: [[old-slug]].',
+        related: ['old-slug', 'other'],
+      });
+
+      const result = await store.move('old-slug', 'new-slug');
+
+      expect(result.note.frontmatter.related).toEqual(['new-slug', 'other']);
+      expect(result.note.content.trim()).toBe('Self link: [[new-slug]].');
+      const persisted = await store.get('new-slug');
+      expect(persisted!.frontmatter.related).toEqual(['new-slug', 'other']);
+      expect(persisted!.content.trim()).toBe('Self link: [[new-slug]].');
+    });
+
+    test('inline-link-only rewrite preserves the referrer\'s frontmatter block verbatim', async () => {
+      // A body-link-only update must NOT round-trip frontmatter through upsert —
+      // that would drop fields outside the flat-extras contract (e.g. an array
+      // like Obsidian `aliases`) and reorder keys. Seed a raw file directly so it
+      // carries an array field the read/normalize path can't reproduce.
+      await store.upsert({ slug: 'target-note', title: 'Target', content: 'Body.' });
+      const rawReferrer = [
+        '---',
+        'title: Referrer',
+        'date: 2020-01-01',
+        'aliases:',
+        '  - nickname-one',
+        '  - nickname-two',
+        'tags: []',
+        'related: []',
+        '---',
+        'Points at [[target-note]].',
+        '',
+      ].join('\n');
+      await fs.writeFile(path.join(dir, 'referrer.md'), rawReferrer, 'utf-8');
+
+      const result = await store.move('target-note', 'new-location');
+
+      expect(result.updatedRefs).toContain('referrer');
+      const onDisk = await fs.readFile(path.join(dir, 'referrer.md'), 'utf-8');
+      // Body link rewritten...
+      expect(onDisk).toContain('Points at [[new-location]].');
+      // ...and the array frontmatter field survives verbatim.
+      expect(onDisk).toContain('aliases:\n  - nickname-one\n  - nickname-two');
+    });
+
+    test('a non-referencing note is left byte-identical after a move', async () => {
+      await store.upsert({ slug: 'target-note', title: 'Target', content: 'Body.' });
+      const rawUnrelated = [
+        '---',
+        'title: Unrelated',
+        'date: 2020-01-01',
+        'tags: []',
+        'related: []',
+        '---',
+        'Mentions old-slug and target-note as plain text, no links.',
+        '',
+      ].join('\n');
+      await fs.writeFile(path.join(dir, 'unrelated.md'), rawUnrelated, 'utf-8');
+
+      await store.move('target-note', 'new-location');
+
+      const after = await fs.readFile(path.join(dir, 'unrelated.md'), 'utf-8');
+      expect(after).toBe(rawUnrelated);
+    });
+
     test('move rewrites self-reference in moved note\'s related[]', async () => {
       // The moved note's own related[] referenced its old slug. After the move,
       // that entry should point to the new slug (not the now-stale old slug).
