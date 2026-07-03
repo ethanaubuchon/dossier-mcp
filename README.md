@@ -107,8 +107,12 @@ If `profile.md` doesn't exist, `get_vault_context` returns a clear error message
 | `list_notes` | List notes; optional `path` prefix filter (e.g. `projects/startup`) |
 | `get_note` | Fetch a note by slug |
 | `search_notes` | Full-text keyword search |
+| `list_todos` | List notes with open `- [ ]` checkboxes; optional `path` prefix filter |
 | `create_note` | Create a note; `path` sets slug; defaults to `inbox/<title-slug>` |
-| `update_note` | Update an existing note by slug |
+| `update_note` | Overwrite an existing note by slug (regenerates the whole body) |
+| `append_to_section` | Append content under a named `## heading` without regenerating the note |
+| `edit_note` | Exact-string find/replace in a note's body; match must be unique unless `replace_all` is set |
+| `move_note` | Move/rename a note to a new slug; updates `related` references in other notes |
 | `delete_note` | Delete a note by slug |
 
 ## Resources exposed to Claude

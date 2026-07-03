@@ -13,10 +13,12 @@ This repo uses **pnpm** (pinned via `packageManager` / Corepack). All commands r
 
 | Script | Purpose |
 |--------|---------|
-| `pnpm dev` | Start Express server with hot reload |
-| `pnpm mcp` | Start MCP server (stdio transport) |
+| `pnpm mcp` | Start the MCP server (stdio transport) — the primary entry point (`src/mcp-entry.ts`) |
 | `pnpm build` | Compile TypeScript to `dist/` |
-| `pnpm test` | Run Jest test suite |
+| `pnpm test` | Run the Jest test suite |
+| `pnpm start:mcp` | Run the compiled MCP server (`dist/mcp-entry.js`) |
+
+> `pnpm dev` and `pnpm start` reference a legacy HTTP entry (`src/index.ts`) that no longer exists — use the MCP scripts above.
 
 ## Key Gotchas
 
@@ -29,9 +31,8 @@ during your work, add it here before completing the session._
 
 Always use a branch and worktree — even for small changes. This keeps main clean and other sessions unblocked.
 
-1. `git checkout main && git pull origin main`
-2. `git checkout -b <branch-name>`
-3. `git worktree add .worktrees/<branch-name> <branch-name>`
+1. `git fetch origin main`
+2. `git worktree add .worktrees/<branch-name> -b <branch-name> origin/main` — creates the branch and its worktree in one step, off up-to-date `main`
 
 ### Small Changes (≤ 2 files AND ≤ 50 lines)
 
