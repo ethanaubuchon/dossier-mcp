@@ -1267,3 +1267,156 @@ describe('append_to_section — MCP handler integration', () => {
     expect(inputSchema.safeParse({ slug: 'doc', heading: 'Log', content: '' }).success).toBe(false);
   });
 });
+
+describe('edit_note — MCP handler integration', () => {
+  let dir: string;
+  let noteStore: NoteStore;
+  let searchIndex: SearchIndex;
+  let server: ReturnType<typeof createMcpServer>;
+
+  beforeEach(async () => {
+    dir = await makeTmpDir();
+    noteStore = new NoteStore(dir);
+    searchIndex = new SearchIndex();
+    await noteStore.initialize();
+    server = createMcpServer(noteStore, searchIndex, dir);
+  });
+
+  afterEach(async () => {
+    await noteStore.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  function getTool(name: string) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const reg = (server as any)._registeredTools[name];
+    if (!reg) throw new Error(`tool not registered: ${name}`);
+    return reg;
+  }
+
+  // Seed a note on disk with an explicit (old) date so date-preservation is
+  // distinguishable from the today-stamped `updated` field.
+  async function seedDoc(): Promise<void> {
+    const raw = [
+      '---',
+      'title: Doc',
+      'date: 2020-01-01',
+      'tags:',
+      '  - t',
+      'related:',
+      '  - other',
+      'status: shaping',
+      '---',
+      '## Log',
+      '',
+      'draft entry',
+      '',
+    ].join('\n');
+    await fs.writeFile(path.join(dir, 'doc.md'), raw, 'utf-8');
+  }
+
+  test('replaces text, stamps updated, preserves date + frontmatter, returns full note', async () => {
+    await seedDoc();
+    const today = new Date().toISOString().split('T')[0];
+    const res = await getTool('edit_note').handler({ slug: 'doc', old_string: 'draft entry', new_string: 'final entry' });
+
+    expect(res.isError).toBeFalsy();
+    expect(res.content[0].text).toContain('final entry');
+    expect(res.content[0].text).not.toContain('draft entry');
+    expect(res.content[0].text).toMatch(/^---\n/);
+
+    const after = await noteStore.get('doc');
+    expect(after!.content.trimEnd()).toBe('## Log\n\nfinal entry');
+    expect(after!.frontmatter.date).toBe('2020-01-01'); // preserved
+    expect(after!.frontmatter.updated).toBe(today); // stamped
+    expect(after!.frontmatter.status).toBe('shaping'); // extra preserved
+    expect(after!.frontmatter.tags).toEqual(['t']);
+    expect(after!.frontmatter.related).toEqual(['other']);
+  });
+
+  test('re-indexes the note so the edited text is searchable', async () => {
+    await seedDoc();
+    await getTool('edit_note').handler({ slug: 'doc', old_string: 'draft entry', new_string: 'zebradistinct' });
+
+    const searchRes = await getTool('search_notes').handler({ query: 'zebradistinct' });
+    const found = JSON.parse(searchRes.content[0].text);
+    expect(found.some((r: { slug: string }) => r.slug === 'doc')).toBe(true);
+  });
+
+  test('empty new_string deletes the matched text', async () => {
+    await seedDoc();
+    const res = await getTool('edit_note').handler({ slug: 'doc', old_string: 'draft entry', new_string: '' });
+    expect(res.isError).toBeFalsy();
+    const after = await noteStore.get('doc');
+    expect(after!.content.trimEnd()).toBe('## Log');
+  });
+
+  test('old_string not found errors and leaves the note untouched', async () => {
+    await seedDoc();
+    const res = await getTool('edit_note').handler({ slug: 'doc', old_string: 'no such text', new_string: 'x' });
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toContain('not found');
+    const after = await noteStore.get('doc');
+    expect(after!.frontmatter.updated).toBeUndefined();
+    expect(after!.content.trimEnd()).toBe('## Log\n\ndraft entry'); // body byte-identical
+  });
+
+  test('a no-op edit (new_string equals old_string) errors without writing', async () => {
+    await seedDoc();
+    const res = await getTool('edit_note').handler({ slug: 'doc', old_string: 'draft entry', new_string: 'draft entry' });
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toContain('identical');
+    const after = await noteStore.get('doc');
+    expect(after!.frontmatter.updated).toBeUndefined();
+  });
+
+  test('overwrites a pre-existing stale updated field', async () => {
+    const raw = '---\ntitle: Doc\ndate: 2020-01-01\nupdated: 2019-06-06\ntags: []\nrelated: []\n---\ndraft entry\n';
+    await fs.writeFile(path.join(dir, 'doc.md'), raw, 'utf-8');
+    const today = new Date().toISOString().split('T')[0];
+    const res = await getTool('edit_note').handler({ slug: 'doc', old_string: 'draft entry', new_string: 'final' });
+    expect(res.isError).toBeFalsy();
+    const after = await noteStore.get('doc');
+    expect(after!.frontmatter.updated).toBe(today);
+  });
+
+  test('non-unique old_string errors with the match count', async () => {
+    const raw = '---\ntitle: Doc\ndate: 2020-01-01\ntags: []\nrelated: []\n---\nfoo and foo and foo\n';
+    await fs.writeFile(path.join(dir, 'doc.md'), raw, 'utf-8');
+    const res = await getTool('edit_note').handler({ slug: 'doc', old_string: 'foo', new_string: 'bar' });
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toContain('not unique');
+    expect(res.content[0].text).toContain('3');
+    const after = await noteStore.get('doc');
+    expect(after!.frontmatter.updated).toBeUndefined();
+  });
+
+  test('replace_all=true replaces every occurrence', async () => {
+    const raw = '---\ntitle: Doc\ndate: 2020-01-01\ntags: []\nrelated: []\n---\nfoo and foo and foo\n';
+    await fs.writeFile(path.join(dir, 'doc.md'), raw, 'utf-8');
+    const res = await getTool('edit_note').handler({ slug: 'doc', old_string: 'foo', new_string: 'bar', replace_all: true });
+    expect(res.isError).toBeFalsy();
+    const after = await noteStore.get('doc');
+    expect(after!.content.trimEnd()).toBe('bar and bar and bar');
+  });
+
+  test('invalid slug is rejected', async () => {
+    const res = await getTool('edit_note').handler({ slug: '../evil', old_string: 'x', new_string: 'y' });
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toContain('Invalid slug');
+  });
+
+  test('missing note is reported as not found', async () => {
+    const res = await getTool('edit_note').handler({ slug: 'nope', old_string: 'x', new_string: 'y' });
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toContain('not found');
+  });
+
+  test('schema: empty old_string is rejected; empty new_string is accepted; replace_all defaults to false', () => {
+    const { inputSchema } = getTool('edit_note');
+    expect(inputSchema.safeParse({ slug: 'doc', old_string: '', new_string: 'x' }).success).toBe(false);
+    const parsed = inputSchema.safeParse({ slug: 'doc', old_string: 'a', new_string: '' });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.replace_all).toBe(false);
+  });
+});
