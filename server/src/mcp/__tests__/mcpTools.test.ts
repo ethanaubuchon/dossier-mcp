@@ -1127,3 +1127,143 @@ describe('frontmatter passthrough — MCP handler integration', () => {
     expect(found.some((r: { slug: string }) => r.slug === 'projects/x/with-extras')).toBe(true);
   });
 });
+
+describe('append_to_section — MCP handler integration', () => {
+  let dir: string;
+  let noteStore: NoteStore;
+  let searchIndex: SearchIndex;
+  let server: ReturnType<typeof createMcpServer>;
+
+  beforeEach(async () => {
+    dir = await makeTmpDir();
+    noteStore = new NoteStore(dir);
+    searchIndex = new SearchIndex();
+    await noteStore.initialize();
+    server = createMcpServer(noteStore, searchIndex, dir);
+  });
+
+  afterEach(async () => {
+    await noteStore.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  function getTool(name: string) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const reg = (server as any)._registeredTools[name];
+    if (!reg) throw new Error(`tool not registered: ${name}`);
+    return reg;
+  }
+
+  // Seed a note on disk with an explicit (old) date so date-preservation is
+  // distinguishable from the today-stamped `updated` field.
+  async function seedDoc(): Promise<void> {
+    const raw = [
+      '---',
+      'title: Doc',
+      'date: 2020-01-01',
+      'tags:',
+      '  - t',
+      'related:',
+      '  - other',
+      'status: shaping',
+      '---',
+      '## Log',
+      '',
+      'first',
+      '',
+    ].join('\n');
+    await fs.writeFile(path.join(dir, 'doc.md'), raw, 'utf-8');
+  }
+
+  test('appends under a heading, stamps updated, preserves date + frontmatter, returns full note', async () => {
+    await seedDoc();
+    const today = new Date().toISOString().split('T')[0];
+    const tool = getTool('append_to_section');
+    const res = await tool.handler({ slug: 'doc', heading: 'Log', content: 'second' });
+
+    expect(res.isError).toBeFalsy();
+    // Returns the full updated note (raw), not a confirmation string.
+    expect(res.content[0].text).toContain('## Log');
+    expect(res.content[0].text).toContain('second');
+    expect(res.content[0].text).toMatch(/^---\n/);
+
+    const after = await noteStore.get('doc');
+    // matter.stringify adds a trailing newline on persistence; structure is exact otherwise.
+    expect(after!.content.trimEnd()).toBe('## Log\n\nfirst\n\nsecond');
+    expect(after!.frontmatter.date).toBe('2020-01-01'); // preserved
+    expect(after!.frontmatter.updated).toBe(today); // stamped
+    expect(after!.frontmatter.status).toBe('shaping'); // extra preserved
+    expect(after!.frontmatter.tags).toEqual(['t']);
+    expect(after!.frontmatter.related).toEqual(['other']);
+  });
+
+  test('re-indexes the note so the appended text is searchable', async () => {
+    await seedDoc();
+    const tool = getTool('append_to_section');
+    await tool.handler({ slug: 'doc', heading: 'Log', content: 'zebradistinct' });
+
+    const searchRes = await getTool('search_notes').handler({ query: 'zebradistinct' });
+    const found = JSON.parse(searchRes.content[0].text);
+    expect(found.some((r: { slug: string }) => r.slug === 'doc')).toBe(true);
+  });
+
+  test('missing heading errors with the note\'s existing headings', async () => {
+    await seedDoc();
+    const tool = getTool('append_to_section');
+    const res = await tool.handler({ slug: 'doc', heading: 'Decisions', content: 'x' });
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toContain('not found');
+    expect(res.content[0].text).toContain('"Log"');
+    expect(res.content[0].text).toContain('create_if_missing=true');
+    // Note is untouched on error.
+    const after = await noteStore.get('doc');
+    expect(after!.frontmatter.updated).toBeUndefined();
+  });
+
+  test('ambiguous heading errors with the match count', async () => {
+    const raw = '---\ntitle: Doc\ndate: 2020-01-01\ntags: []\nrelated: []\n---\n## Log\n\na\n\n## Log\n\nb\n';
+    await fs.writeFile(path.join(dir, 'doc.md'), raw, 'utf-8');
+    const res = await getTool('append_to_section').handler({ slug: 'doc', heading: 'Log', content: 'x' });
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toContain('ambiguous');
+    expect(res.content[0].text).toContain('2');
+  });
+
+  test('create_if_missing=true creates a new section at EOF', async () => {
+    await seedDoc();
+    const res = await getTool('append_to_section').handler({
+      slug: 'doc',
+      heading: 'Decisions',
+      content: '- chose X',
+      create_if_missing: true,
+    });
+    expect(res.isError).toBeFalsy();
+    const after = await noteStore.get('doc');
+    expect(after!.content.trimEnd()).toBe('## Log\n\nfirst\n\n## Decisions\n\n- chose X');
+  });
+
+  test('invalid slug is rejected', async () => {
+    const res = await getTool('append_to_section').handler({ slug: '../evil', heading: 'Log', content: 'x' });
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toContain('Invalid slug');
+  });
+
+  test('missing note is reported as not found', async () => {
+    const res = await getTool('append_to_section').handler({ slug: 'nope', heading: 'Log', content: 'x' });
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toContain('not found');
+  });
+
+  test('schema: empty heading is rejected; create_if_missing defaults to false', () => {
+    const { inputSchema } = getTool('append_to_section');
+    expect(inputSchema.safeParse({ slug: 'doc', heading: '', content: 'x' }).success).toBe(false);
+    const parsed = inputSchema.safeParse({ slug: 'doc', heading: 'Log', content: 'x' });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.create_if_missing).toBe(false);
+  });
+
+  test('schema: empty content is rejected', () => {
+    const { inputSchema } = getTool('append_to_section');
+    expect(inputSchema.safeParse({ slug: 'doc', heading: 'Log', content: '' }).success).toBe(false);
+  });
+});
