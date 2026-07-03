@@ -1,8 +1,13 @@
-import { appendToSection } from '../sections.js';
+import { appendToSection, editBody } from '../sections.js';
 
 // Helper: appendToSection returns a discriminated union; narrow to the ok body
 // or fail loudly so type errors surface as test failures, not silent undefined.
 function body(result: ReturnType<typeof appendToSection>): string {
+  if (!result.ok) throw new Error(`expected ok result, got ${JSON.stringify(result)}`);
+  return result.body;
+}
+
+function editedBody(result: ReturnType<typeof editBody>): string {
   if (!result.ok) throw new Error(`expected ok result, got ${JSON.stringify(result)}`);
   return result.body;
 }
@@ -106,5 +111,70 @@ describe('appendToSection', () => {
     const input = '## Status\n\nshaping\n';
     const result = appendToSection(input, 'status', '- x', false);
     expect(result).toEqual({ ok: false, reason: 'missing', headings: ['Status'] });
+  });
+});
+
+describe('editBody', () => {
+  test('replaces a single unique match', () => {
+    const input = '## Status\n\nshaping\n\n## Notes\n\nfoo\n';
+    const out = editedBody(editBody(input, 'shaping', 'shipped', false));
+    expect(out).toBe('## Status\n\nshipped\n\n## Notes\n\nfoo\n');
+  });
+
+  test('no match reports not_found', () => {
+    const result = editBody('## Status\n\nshaping\n', 'missing text', 'x', false);
+    expect(result).toEqual({ ok: false, reason: 'not_found' });
+  });
+
+  test('multiple matches without replace_all report not_unique with count', () => {
+    const result = editBody('foo bar foo baz foo\n', 'foo', 'qux', false);
+    expect(result).toEqual({ ok: false, reason: 'not_unique', count: 3 });
+  });
+
+  test('replace_all replaces every occurrence', () => {
+    const out = editedBody(editBody('foo bar foo baz foo\n', 'foo', 'qux', true));
+    expect(out).toBe('qux bar qux baz qux\n');
+  });
+
+  test('replace_all with a single occurrence still replaces it', () => {
+    const out = editedBody(editBody('foo bar\n', 'foo', 'qux', true));
+    expect(out).toBe('qux bar\n');
+  });
+
+  test('a no-op edit (new_string equals old_string) reports no_change', () => {
+    const result = editBody('foo bar\n', 'foo', 'foo', false);
+    expect(result).toEqual({ ok: false, reason: 'no_change' });
+  });
+
+  test('counts non-overlapping occurrences (aa in aaa is one match)', () => {
+    const out = editedBody(editBody('aaa', 'aa', 'X', false));
+    expect(out).toBe('Xa');
+  });
+
+  test('empty new_string deletes the match', () => {
+    const out = editedBody(editBody('keep DROPME rest\n', ' DROPME', '', false));
+    expect(out).toBe('keep rest\n');
+  });
+
+  test('matches across newlines', () => {
+    const input = '## Log\n\n- old line\n- keep\n';
+    const out = editedBody(editBody(input, '- old line\n', '- new line\n', false));
+    expect(out).toBe('## Log\n\n- new line\n- keep\n');
+  });
+
+  test('treats regex metacharacters in old_string literally', () => {
+    const input = 'call a.b(c) here\n';
+    const out = editedBody(editBody(input, 'a.b(c)', 'X', false));
+    expect(out).toBe('call X here\n');
+  });
+
+  test('is whitespace-sensitive — a near-miss does not match', () => {
+    const result = editBody('- item one\n', '- item  one', 'x', false);
+    expect(result).toEqual({ ok: false, reason: 'not_found' });
+  });
+
+  test('empty old_string reports not_found rather than matching everything', () => {
+    const result = editBody('anything\n', '', 'x', false);
+    expect(result).toEqual({ ok: false, reason: 'not_found' });
   });
 });

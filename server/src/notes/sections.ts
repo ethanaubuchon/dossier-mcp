@@ -10,6 +10,17 @@ export type AppendResult =
   | { ok: false; reason: 'missing'; headings: string[] }
   | { ok: false; reason: 'ambiguous'; count: number };
 
+/**
+ * Result of {@link editBody}. A discriminated union so callers translate the
+ * expected failures (no match / non-unique match) into structured responses;
+ * only genuinely unexpected states throw.
+ */
+export type EditResult =
+  | { ok: true; body: string }
+  | { ok: false; reason: 'not_found' }
+  | { ok: false; reason: 'no_change' }
+  | { ok: false; reason: 'not_unique'; count: number };
+
 // ATX heading: 1–6 `#`, a space, the text, and an optional CommonMark closing
 // `#` sequence which we strip. The lazy body + `\s*#*\s*$` tail drops a trailing
 // run of `#` (e.g. `## Log ##` → `Log`) without eating a mid-text `#`.
@@ -114,4 +125,34 @@ export function appendToSection(
   // Uniformly drop any trailing blank lines (e.g. the file's final newline
   // carried in via `rest`) so mid-body and EOF appends return the same shape.
   return { ok: true, body: trimTrailingBlankLines(rebuilt).join('\n') };
+}
+
+/**
+ * Replace an exact substring `oldString` with `newString` in a markdown `body`,
+ * mirroring the Edit-tool pattern: literal (non-regex) matching with a
+ * uniqueness requirement so an ambiguous edit fails loudly instead of silently
+ * changing the wrong occurrence.
+ *
+ * - No match → reported, not a no-op.
+ * - `newString` equal to `oldString` (a no-op edit) → reported, so a caller's
+ *   mistake isn't masked by a success + spurious `updated` stamp.
+ * - More than one match with `replaceAll=false` → reported with the count, not
+ *   guessed. With `replaceAll=true`, every occurrence is replaced.
+ * - Whitespace is significant and no surrounding text is reflowed — the edit is
+ *   surgical. `newString` may be empty (deletion).
+ *
+ * Pure: no I/O. The caller owns reading/writing the note.
+ */
+export function editBody(
+  body: string,
+  oldString: string,
+  newString: string,
+  replaceAll: boolean,
+): EditResult {
+  if (oldString === '') return { ok: false, reason: 'not_found' };
+  const count = body.split(oldString).length - 1;
+  if (count === 0) return { ok: false, reason: 'not_found' };
+  if (newString === oldString) return { ok: false, reason: 'no_change' };
+  if (count > 1 && !replaceAll) return { ok: false, reason: 'not_unique', count };
+  return { ok: true, body: body.split(oldString).join(newString) };
 }

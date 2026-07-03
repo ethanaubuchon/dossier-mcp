@@ -6,7 +6,7 @@ import { NoteStore } from '../notes/NoteStore.js';
 import { SearchIndex } from '../search/SearchIndex.js';
 import { coerceStringArray, resolveFrontmatterParams, FRONTMATTER_DENYLIST } from './coerce.js';
 import { extractTodos } from '../notes/todos.js';
-import { appendToSection } from '../notes/sections.js';
+import { appendToSection, editBody } from '../notes/sections.js';
 
 export async function vaultContextHandler(notesDir: string) {
   try {
@@ -259,6 +259,68 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         return { isError: true, content: [{ type: 'text', text: `Failed to append to note "${slug}": ${msg}` }] };
+      }
+      return { content: [{ type: 'text', text: written.raw }] };
+    }
+  );
+
+  server.tool(
+    'edit_note',
+    'Replace an exact string in a note\'s body with a new string, without regenerating the whole note. ' +
+    'Mirrors the Edit-tool pattern — surgical exact-match find/replace — for targeted mid-body changes; ' +
+    'cheaper and safer than update_note when you only need to change a specific passage. ' +
+    'old_string must match exactly (whitespace included) and be unique unless replace_all is set. ' +
+    'Stamps the note\'s "updated" frontmatter field and returns the full updated note.',
+    {
+      slug: z.string().describe('The slug of the note to edit'),
+      old_string: z.string().min(1).describe('Exact text to find in the note body (whitespace-sensitive)'),
+      new_string: z.string().describe('Text to replace it with (may be empty to delete the match)'),
+      replace_all: z.boolean().default(false).describe(
+        'Replace every occurrence of old_string. ' +
+        'Defaults to false — a non-unique old_string errors with the match count so you can disambiguate.'
+      ),
+    },
+    async ({ slug, old_string, new_string, replace_all }) => {
+      if (!isValidSlug(slug)) return slugValidationError(slug);
+      let written;
+      try {
+        const note = await noteStore.get(slug);
+        if (!note) {
+          return { isError: true, content: [{ type: 'text', text: `Note "${slug}" not found.` }] };
+        }
+        const result = editBody(note.content, old_string, new_string, replace_all);
+        if (!result.ok) {
+          if (result.reason === 'not_found') {
+            return {
+              isError: true,
+              content: [{ type: 'text', text: `old_string not found in "${slug}". It must match the note body exactly, including whitespace (frontmatter is not editable via this tool).` }],
+            };
+          }
+          if (result.reason === 'no_change') {
+            return {
+              isError: true,
+              content: [{ type: 'text', text: `old_string and new_string are identical — no change to make in "${slug}".` }],
+            };
+          }
+          return {
+            isError: true,
+            content: [{ type: 'text', text: `old_string is not unique — matches ${result.count} places in "${slug}". Provide a longer, more specific old_string or pass replace_all=true.` }],
+          };
+        }
+        const updated = new Date().toISOString().split('T')[0];
+        written = await noteStore.upsert({
+          slug,
+          title: note.frontmatter.title,
+          content: result.body,
+          tags: note.frontmatter.tags,
+          related: note.frontmatter.related,
+          frontmatter: { updated },
+        });
+        const allNotes = await noteStore.listWithContent();
+        searchIndex.buildIndexWithContent(allNotes);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return { isError: true, content: [{ type: 'text', text: `Failed to edit note "${slug}": ${msg}` }] };
       }
       return { content: [{ type: 'text', text: written.raw }] };
     }
