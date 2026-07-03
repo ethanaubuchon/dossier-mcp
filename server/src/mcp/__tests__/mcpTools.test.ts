@@ -588,6 +588,22 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
       expect(searchResults[0].slug).toBe('new-slug');
     });
 
+    test('move_note updates inline body links and re-indexes the rewritten body', async () => {
+      await noteStore.upsert({ slug: 'old-slug', title: 'Moving', content: 'Body.' });
+      await noteStore.upsert({ slug: 'referrer', title: 'Ref', content: 'Link to [[old-slug]] here.' });
+
+      const result = await noteStore.move('old-slug', 'new-slug');
+      const allNotes = await noteStore.listWithContent();
+      searchIndex.buildIndexWithContent(allNotes);
+
+      // The inline-link-only referrer is reported (what the handler counts).
+      expect(result.updatedRefs).toContain('referrer');
+      const ref = await noteStore.get('referrer');
+      expect(ref!.content.trim()).toBe('Link to [[new-slug]] here.');
+      // Index reflects the rewritten slug, not the stale one.
+      expect(searchIndex.search('new-slug').some((r) => r.slug === 'referrer')).toBe(true);
+    });
+
     test('move_note rejects when source does not exist', async () => {
       await expect(noteStore.move('nonexistent', 'target')).rejects.toThrow('not found');
     });
