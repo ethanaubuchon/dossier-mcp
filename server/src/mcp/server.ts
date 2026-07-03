@@ -6,6 +6,7 @@ import { NoteStore } from '../notes/NoteStore.js';
 import { SearchIndex } from '../search/SearchIndex.js';
 import { coerceStringArray, resolveFrontmatterParams, FRONTMATTER_DENYLIST } from './coerce.js';
 import { extractTodos } from '../notes/todos.js';
+import { appendToSection } from '../notes/sections.js';
 
 export async function vaultContextHandler(notesDir: string) {
   try {
@@ -204,6 +205,62 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
       return {
         content: [{ type: 'text', text: `Updated note "${note.frontmatter.title}" (slug: "${note.slug}").` }],
       };
+    }
+  );
+
+  server.tool(
+    'append_to_section',
+    'Append content under a named "## heading" in an existing note, without regenerating the whole body. ' +
+    'Cheaper and safer than update_note for the common "add a bullet / log an entry" case — no need to read and resend the full note. ' +
+    'The heading is matched by exact text (level-agnostic); content is inserted at the end of that section. ' +
+    'Stamps the note\'s "updated" frontmatter field and returns the full updated note.',
+    {
+      slug: z.string().describe('The slug of the note to append to'),
+      heading: z.string().min(1).describe('Exact text of the target "## heading" (without the leading #s)'),
+      content: z.string().min(1).describe('Markdown content to append at the end of the section'),
+      create_if_missing: z.boolean().default(false).describe(
+        'If the heading is absent, create a new "## heading" section at the end of the note. ' +
+        'Defaults to false — a missing heading errors with the note\'s existing headings so you can correct it.'
+      ),
+    },
+    async ({ slug, heading, content, create_if_missing }) => {
+      if (!isValidSlug(slug)) return slugValidationError(slug);
+      let written;
+      try {
+        const note = await noteStore.get(slug);
+        if (!note) {
+          return { isError: true, content: [{ type: 'text', text: `Note "${slug}" not found.` }] };
+        }
+        const result = appendToSection(note.content, heading, content, create_if_missing);
+        if (!result.ok) {
+          if (result.reason === 'missing') {
+            const list = result.headings.length ? result.headings.map((h) => `"${h}"`).join(', ') : '(none)';
+            return {
+              isError: true,
+              content: [{ type: 'text', text: `Heading "${heading}" not found in "${slug}". Existing headings: ${list}. Pass create_if_missing=true to create it.` }],
+            };
+          }
+          return {
+            isError: true,
+            content: [{ type: 'text', text: `Heading "${heading}" is ambiguous — matches ${result.count} headings in "${slug}". Use a more specific or nested heading.` }],
+          };
+        }
+        const updated = new Date().toISOString().split('T')[0];
+        written = await noteStore.upsert({
+          slug,
+          title: note.frontmatter.title,
+          content: result.body,
+          tags: note.frontmatter.tags,
+          related: note.frontmatter.related,
+          frontmatter: { updated },
+        });
+        const allNotes = await noteStore.listWithContent();
+        searchIndex.buildIndexWithContent(allNotes);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return { isError: true, content: [{ type: 'text', text: `Failed to append to note "${slug}": ${msg}` }] };
+      }
+      return { content: [{ type: 'text', text: written.raw }] };
     }
   );
 
