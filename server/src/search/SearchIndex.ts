@@ -1,4 +1,5 @@
 import type { NoteListItem, SearchResult } from '../types.js';
+import { makeTagExcluder } from '../notes/tagFilter.js';
 
 const BM25_K1 = 1.2;
 const BM25_B = 0.75;
@@ -68,12 +69,18 @@ export class SearchIndex {
     this.computeCorpusStats();
   }
 
-  search(query: string, limit = 10): SearchResult[] {
+  search(query: string, limit = 10, excludeTags: string[] = []): SearchResult[] {
     const queryTerms = this.tokenizeQuery(query);
     if (queryTerms.length === 0) return [];
 
     const results: SearchResult[] = [];
     const safeAvgDocLen = this.avgDocLen > 0 ? this.avgDocLen : 1;
+
+    // Entries carrying any excluded tag are skipped before scoring/excerpt work,
+    // so the later slice(limit) fills from survivors. Exclusion is a post-scoring
+    // filter, not a re-index: corpus stats (IDF, avgDocLen, docFreq) still reflect
+    // the full corpus, so excluded notes can still shift survivors' relative scores.
+    const isExcluded = makeTagExcluder(excludeTags);
 
     // Precompute IDF per query term to avoid redundant O(entries) scans
     const idfMap = new Map<string, number>();
@@ -83,6 +90,7 @@ export class SearchIndex {
     }
 
     for (const entry of this.entries) {
+      if (isExcluded(entry.frontmatter.tags)) continue;
       let score = 0;
       for (const term of queryTerms) {
         const tf = this.getTermFrequency(entry, term);

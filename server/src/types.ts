@@ -27,4 +27,5 @@ export interface SearchResult {
 
 export interface Config {
   notesDir: string;
+  defaultExcludeTags: string[];
 }

@@ -31,12 +31,16 @@ import { NoteStore } from './notes/NoteStore.js';
 import { SearchIndex } from './search/SearchIndex.js';
 import { createMcpServer } from './mcp/server.js';
 import { loadConfig } from './config/config.js';
+import { resolveDefaultExcludeTags } from './config/excludeTags.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 async function main() {
   const config = await loadConfig();
   const notesDir = process.env.NOTES_DIR || config.notesDir || path.join(__dirname, '../../notes');
+  // Env overrides config (mirrors NOTES_DIR). Unset env → config default;
+  // explicit empty string → [] (per-vault opt-out).
+  const defaultExcludeTags = resolveDefaultExcludeTags(process.env.DOSSIER_EXCLUDE_TAGS, config.defaultExcludeTags);
 
   const noteStore = new NoteStore(notesDir);
   const searchIndex = new SearchIndex();
@@ -63,7 +67,7 @@ async function main() {
     console.error('[library] File watcher error — vault changes may not rebuild the index:', err);
   });
 
-  const server = createMcpServer(noteStore, searchIndex, notesDir);
+  const server = createMcpServer(noteStore, searchIndex, { notesDir, defaultExcludeTags });
   const transport = new StdioServerTransport();
 
   await server.connect(transport);

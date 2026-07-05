@@ -6,6 +6,7 @@ import { NoteStore, pickFrontmatterExtras } from '../notes/NoteStore.js';
 import { SearchIndex } from '../search/SearchIndex.js';
 import { coerceStringArray, resolveFrontmatterParams, FRONTMATTER_DENYLIST } from './coerce.js';
 import { extractTodos } from '../notes/todos.js';
+import { filterByExcludedTags } from '../notes/tagFilter.js';
 import { appendToSection, editBody } from '../notes/sections.js';
 import { applyFrontmatterEdit } from '../notes/frontmatter.js';
 import type { Note } from '../types.js';
@@ -51,7 +52,13 @@ export function slugValidationError(slug: string): ToolResponse {
   return err(`Invalid slug "${slug}": must be a non-empty relative path without "..", null bytes, or leading/trailing "/"`);
 }
 
-export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, notesDir: string): McpServer {
+export function createMcpServer(
+  noteStore: NoteStore,
+  searchIndex: SearchIndex,
+  config: { notesDir: string; defaultExcludeTags?: string[] },
+): McpServer {
+  const { notesDir } = config;
+  const defaultExcludeTags = config.defaultExcludeTags ?? [];
   const server = new McpServer({
     name: 'library',
     version: '1.0.0',
@@ -136,16 +143,20 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
 
   server.tool(
     'list_notes',
-    'List notes in the knowledge base, sorted by date (newest first). Optionally filter by slug prefix to scope results to a folder. If you haven\'t already, call get_vault_context first to orient yourself to this vault.',
+    'List notes in the knowledge base, sorted by date (newest first). Optionally filter by slug prefix to scope results to a folder. '
+    + 'Notes tagged with the vault\'s default-excluded tags (e.g. archived, historical) are omitted by default; pass exclude_tags: [] to include them, or a custom list to override the default. '
+    + 'If you haven\'t already, call get_vault_context first to orient yourself to this vault.',
     {
       path: z.string().optional().describe('Optional slug prefix to filter by (e.g. "projects/startup"). Trailing slash is normalized automatically.'),
+      exclude_tags: z.array(z.string()).optional().describe('Tags to exclude from results (case-insensitive). Omit to use the vault default-exclude set; pass [] to exclude nothing; pass a list to replace the default.'),
     },
-    async ({ path: prefix }) =>
+    async ({ path: prefix, exclude_tags }) =>
       withToolError('Failed to list notes', async () => {
         const notes = await noteStore.list();
         const normalized = prefix && (prefix.endsWith('/') ? prefix : prefix + '/');
         const filtered = normalized ? notes.filter((n) => n.slug.startsWith(normalized)) : notes;
-        return ok(JSON.stringify(filtered, null, 2));
+        const excluded = filterByExcludedTags(filtered, exclude_tags ?? defaultExcludeTags);
+        return ok(JSON.stringify(excluded, null, 2));
       })
   );
 
@@ -416,14 +427,16 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
 
   server.tool(
     'search_notes',
-    'Search the knowledge base using keyword search. Returns matching notes scored by relevance, with excerpts.',
+    'Search the knowledge base using keyword search. Returns matching notes scored by relevance, with excerpts. '
+    + 'Notes tagged with the vault\'s default-excluded tags (e.g. archived, historical) are omitted by default; pass exclude_tags: [] to include them, or a custom list to override the default.',
     {
       query: z.string().describe('Search query — keywords to search for'),
       limit: z.number().int().min(1).max(100).optional().describe('Maximum number of results to return (default: 10, max: 100)'),
+      exclude_tags: z.array(z.string()).optional().describe('Tags to exclude from results (case-insensitive). Omit to use the vault default-exclude set; pass [] to exclude nothing; pass a list to replace the default.'),
     },
-    async ({ query, limit }) =>
+    async ({ query, limit, exclude_tags }) =>
       withToolError('Search failed', async () => {
-        const results = searchIndex.search(query, limit ?? 10);
+        const results = searchIndex.search(query, limit ?? 10, exclude_tags ?? defaultExcludeTags);
         if (results.length === 0) {
           return ok(`No notes found matching "${query}".`);
         }
@@ -435,18 +448,22 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
     'list_todos',
     'List notes that contain incomplete `- [ ]` markdown checkboxes, with each todo\'s text excerpted. ' +
     'Filter by slug prefix to scope to a folder. ' +
-    'Useful for finding open work across the vault. Note: checkbox syntax inside fenced code blocks is ignored.',
+    'Useful for finding open work across the vault. Note: checkbox syntax inside fenced code blocks is ignored. '
+    + 'Notes tagged with the vault\'s default-excluded tags (e.g. archived, historical) are omitted by default; pass exclude_tags: [] to include them, or a custom list to override the default.',
     {
       path: z.string().optional().describe('Optional slug prefix to filter by (e.g. "projects/startup"). Trailing slash is normalized automatically.'),
       limit: z.number().int().min(1).max(100).optional().describe('Maximum number of notes to return (default: 10, max: 100)'),
+      exclude_tags: z.array(z.string()).optional().describe('Tags to exclude from results (case-insensitive). Omit to use the vault default-exclude set; pass [] to exclude nothing; pass a list to replace the default.'),
     },
-    async ({ path: prefix, limit }) =>
+    async ({ path: prefix, limit, exclude_tags }) =>
       withToolError('Failed to list todos', async () => {
         const notes = await noteStore.listWithContent();
         const normalized = prefix && (prefix.endsWith('/') ? prefix : prefix + '/');
         const scoped = normalized ? notes.filter((n) => n.slug.startsWith(normalized)) : notes;
+        // Exclude before the map below drops frontmatter (and before the limit slice).
+        const visible = filterByExcludedTags(scoped, exclude_tags ?? defaultExcludeTags);
 
-        const withTodos = scoped
+        const withTodos = visible
           .map((n) => ({
             slug: n.slug,
             title: n.frontmatter.title,

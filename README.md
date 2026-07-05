@@ -62,6 +62,7 @@ Then re-add with the command above.
 | Variable | Description |
 |---|---|
 | `NOTES_DIR` | Absolute path to the vault root (e.g. `/path/to/your/vault`) |
+| `DOSSIER_EXCLUDE_TAGS` | Comma-separated tags to exclude from `search_notes`, `list_notes`, and `list_todos` results by default (case-insensitive). Overrides the built-in default (`archived,historical`). Set to an empty string to disable default exclusion for this vault. Callers can still override per request via each tool's `exclude_tags` param (`[]` includes everything; a list replaces the default). Notes remain directly reachable via `get_note` regardless. |
 
 ## profile.md
 
