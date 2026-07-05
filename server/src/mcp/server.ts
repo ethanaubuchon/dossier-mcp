@@ -2,11 +2,12 @@ import fs from 'fs/promises';
 import path from 'path';
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { NoteStore } from '../notes/NoteStore.js';
+import { NoteStore, pickFrontmatterExtras } from '../notes/NoteStore.js';
 import { SearchIndex } from '../search/SearchIndex.js';
 import { coerceStringArray, resolveFrontmatterParams, FRONTMATTER_DENYLIST } from './coerce.js';
 import { extractTodos } from '../notes/todos.js';
 import { appendToSection, editBody } from '../notes/sections.js';
+import { applyFrontmatterEdit } from '../notes/frontmatter.js';
 
 export async function vaultContextHandler(notesDir: string) {
   try {
@@ -321,6 +322,107 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         return { isError: true, content: [{ type: 'text', text: `Failed to edit note "${slug}": ${msg}` }] };
+      }
+      return { content: [{ type: 'text', text: written.raw }] };
+    }
+  );
+
+  server.tool(
+    'edit_frontmatter',
+    'Surgically edit a note\'s frontmatter — set scalar fields (e.g. status) and add/remove tags or related — without regenerating the body. ' +
+    'Cheaper and safer than update_note for frontmatter-only maintenance (status transitions, retagging, related cleanup): the body is read from disk and passed through byte-for-byte, never re-emitted. ' +
+    'set writes scalar passthrough fields (cannot set title/date/tags/related — use add_/remove_ or update_note); add_/remove_tags and add_/remove_related mutate those lists with set semantics (re-adding an existing entry or removing an absent one is a no-op). ' +
+    'Stamps the note\'s "updated" frontmatter field and returns the full updated note.',
+    {
+      slug: z.string().describe('The slug of the note to edit'),
+      set: z.record(z.string(), z.unknown()).optional().describe(
+        'Scalar frontmatter fields to set, e.g. {status: "implemented"}. Cannot set title/date/tags/related — use add_tags/remove_tags, add_related/remove_related, or update_note. The "updated" field is stamped automatically and is ignored if supplied here.'
+      ),
+      add_tags: z.preprocess(coerceStringArray, z.array(z.string()).optional()).describe('Tags to add (union; re-adding an existing tag is a no-op)'),
+      remove_tags: z.preprocess(coerceStringArray, z.array(z.string()).optional()).describe('Tags to remove (removing an absent tag is a no-op)'),
+      add_related: z.preprocess(coerceStringArray, z.array(z.string()).optional()).describe('Related slugs to add (union; re-adding an existing one is a no-op)'),
+      remove_related: z.preprocess(coerceStringArray, z.array(z.string()).optional()).describe('Related slugs to remove (removing an absent one is a no-op)'),
+    },
+    async ({ slug, set, add_tags, remove_tags, add_related, remove_related }) => {
+      if (!isValidSlug(slug)) return slugValidationError(slug);
+
+      // Denylist check on `set` (first-fail, named key) — mirrors create_note,
+      // reusing the shared FRONTMATTER_DENYLIST so tool-managed fields can't be
+      // set via passthrough. Points the caller at the right lever.
+      if (set) {
+        for (const key of Object.keys(set)) {
+          if (FRONTMATTER_DENYLIST.has(key)) {
+            const lever = key === 'tags' || key === 'related'
+              ? `add_${key}/remove_${key}`
+              : 'the typed update_note param';
+            return {
+              isError: true,
+              content: [{ type: 'text', text: `Cannot set '${key}' via set; use ${lever}.` }],
+            };
+          }
+        }
+      }
+
+      // `updated` is stamped automatically on every write; drop any caller value
+      // so it can't manufacture a spurious "successful" write that just re-stamps
+      // today. (It's off FRONTMATTER_DENYLIST — which #65 keeps for update_note's
+      // content round-trip — so this tool strips it explicitly instead.)
+      const setFields = set
+        ? Object.fromEntries(Object.entries(set).filter(([k]) => k !== 'updated'))
+        : undefined;
+
+      let written;
+      try {
+        const note = await noteStore.get(slug);
+        if (!note) {
+          return { isError: true, content: [{ type: 'text', text: `Note "${slug}" not found.` }] };
+        }
+        const result = applyFrontmatterEdit(
+          {
+            tags: note.frontmatter.tags,
+            related: note.frontmatter.related,
+            extras: pickFrontmatterExtras(note.frontmatter),
+          },
+          { set: setFields, addTags: add_tags, removeTags: remove_tags, addRelated: add_related, removeRelated: remove_related },
+        );
+        if (!result.ok) {
+          if (result.reason === 'no_ops') {
+            return {
+              isError: true,
+              content: [{ type: 'text', text: `edit_frontmatter on "${slug}" changed nothing — supply at least one of set, add_tags, remove_tags, add_related, remove_related.` }],
+            };
+          }
+          if (result.reason === 'conflict') {
+            return {
+              isError: true,
+              content: [{ type: 'text', text: `${result.field} lists both add and remove of: ${result.entries.join(', ')} — incoherent, pick one.` }],
+            };
+          }
+          // no_change
+          return {
+            isError: true,
+            content: [{ type: 'text', text: `edit_frontmatter on "${slug}" is a no-op — all adds already present, all removes absent, and set matches the current frontmatter.` }],
+          };
+        }
+        const updated = new Date().toISOString().split('T')[0];
+        // result.tags / result.related go straight to upsert's typed params —
+        // never through coerceStringArray, whose []→undefined "preserve" collapse
+        // would make "remove the last tag" silently no-op. result.extras is the
+        // computed (existing + set) extras; `updated` is stamped here so it wins.
+        // The body is passed through untouched; only frontmatter changes.
+        written = await noteStore.upsert({
+          slug,
+          title: note.frontmatter.title,
+          content: note.content,
+          tags: result.tags,
+          related: result.related,
+          frontmatter: { ...result.extras, updated },
+        });
+        const allNotes = await noteStore.listWithContent();
+        searchIndex.buildIndexWithContent(allNotes);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return { isError: true, content: [{ type: 'text', text: `Failed to edit frontmatter of note "${slug}": ${msg}` }] };
       }
       return { content: [{ type: 'text', text: written.raw }] };
     }

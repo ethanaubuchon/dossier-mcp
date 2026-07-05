@@ -112,6 +112,7 @@ If `profile.md` doesn't exist, `get_vault_context` returns a clear error message
 | `update_note` | Overwrite an existing note by slug (regenerates the whole body) |
 | `append_to_section` | Append content under a named `## heading` without regenerating the note |
 | `edit_note` | Exact-string find/replace in a note's body; match must be unique unless `replace_all` is set |
+| `edit_frontmatter` | Surgical frontmatter-only edit — `set` scalar fields (e.g. `status`) + add/remove `tags`/`related` — without regenerating the body |
 | `move_note` | Move/rename a note to a new slug; updates `related` references and inline `[[wiki-links]]` in other notes |
 | `delete_note` | Delete a note by slug |
 
