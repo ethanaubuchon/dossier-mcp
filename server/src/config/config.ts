@@ -2,12 +2,14 @@ import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import type { Config } from '../types.js';
+import { DEFAULT_EXCLUDE_TAGS } from './excludeTags.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = path.join(__dirname, '../../config.json');
 
 const DEFAULT_CONFIG: Config = {
   notesDir: path.join(__dirname, '../../../notes'),
+  defaultExcludeTags: DEFAULT_EXCLUDE_TAGS,
 };
 
 export async function loadConfig(): Promise<Config> {

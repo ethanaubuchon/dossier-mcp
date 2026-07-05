@@ -354,7 +354,7 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
     }
 
     test('rejects URI-encoded path traversal slug (note://%2e%2e%2fescape)', async () => {
-      const server = createMcpServer(noteStore, searchIndex, dir);
+      const server = createMcpServer(noteStore, searchIndex, { notesDir: dir });
       const readCallback = getNoteResourceCallback(server);
 
       // %2e%2e%2fescape decodes to "../escape" — must be rejected by the guard.
@@ -494,7 +494,7 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
 
     test('returns empty-result message when no notes have todos', async () => {
       await noteStore.upsert({ title: 'Plain', content: 'No checkboxes here.' });
-      const server = createMcpServer(noteStore, searchIndex, dir);
+      const server = createMcpServer(noteStore, searchIndex, { notesDir: dir });
       const result = await getTool(server, 'list_todos').handler({}, {});
       expect(result.content[0].text).toContain('No notes found with incomplete TODOs');
     });
@@ -506,7 +506,7 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
       });
       await noteStore.upsert({ title: 'Empty', content: 'no todos' });
 
-      const server = createMcpServer(noteStore, searchIndex, dir);
+      const server = createMcpServer(noteStore, searchIndex, { notesDir: dir });
       const result = await getTool(server, 'list_todos').handler({}, {});
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed).toHaveLength(1);
@@ -520,7 +520,7 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
       await noteStore.upsert({ slug: 'projects/beta', title: 'Beta', content: '- [ ] beta task' });
       await noteStore.upsert({ slug: 'inbox/gamma', title: 'Gamma', content: '- [ ] gamma task' });
 
-      const server = createMcpServer(noteStore, searchIndex, dir);
+      const server = createMcpServer(noteStore, searchIndex, { notesDir: dir });
       const result = await getTool(server, 'list_todos').handler({ path: 'projects' }, {});
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed).toHaveLength(2);
@@ -534,14 +534,14 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
       for (let i = 0; i < 5; i++) {
         await noteStore.upsert({ title: `Note ${i}`, content: `- [ ] task ${i}` });
       }
-      const server = createMcpServer(noteStore, searchIndex, dir);
+      const server = createMcpServer(noteStore, searchIndex, { notesDir: dir });
       const result = await getTool(server, 'list_todos').handler({ limit: 2 }, {});
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed).toHaveLength(2);
     });
 
     test('limit out of bounds (0, 101, -1) fails Zod validation', () => {
-      const server = createMcpServer(noteStore, searchIndex, dir);
+      const server = createMcpServer(noteStore, searchIndex, { notesDir: dir });
       const { inputSchema } = getTool(server, 'list_todos');
       expect(inputSchema.safeParse({ limit: 0 }).success).toBe(false);
       expect(inputSchema.safeParse({ limit: 101 }).success).toBe(false);
@@ -550,7 +550,7 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
     });
 
     test('omitted params are valid (use defaults)', () => {
-      const server = createMcpServer(noteStore, searchIndex, dir);
+      const server = createMcpServer(noteStore, searchIndex, { notesDir: dir });
       const { inputSchema } = getTool(server, 'list_todos');
       expect(inputSchema.safeParse({}).success).toBe(true);
     });
@@ -559,7 +559,7 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
       const original = noteStore.listWithContent.bind(noteStore);
       noteStore.listWithContent = async () => { throw new Error('boom'); };
       try {
-        const server = createMcpServer(noteStore, searchIndex, dir);
+        const server = createMcpServer(noteStore, searchIndex, { notesDir: dir });
         const result = await getTool(server, 'list_todos').handler({}, {});
         expect(result.isError).toBe(true);
         expect(result.content[0].text).toContain('boom');
@@ -629,42 +629,42 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
     }
 
     test('limit: 0 fails Zod validation', () => {
-      const server = createMcpServer(noteStore, searchIndex, dir);
+      const server = createMcpServer(noteStore, searchIndex, { notesDir: dir });
       const { inputSchema } = getTool(server, 'search_notes');
       const parsed = inputSchema.safeParse({ query: 'x', limit: 0 });
       expect(parsed.success).toBe(false);
     });
 
     test('limit: -1 fails Zod validation', () => {
-      const server = createMcpServer(noteStore, searchIndex, dir);
+      const server = createMcpServer(noteStore, searchIndex, { notesDir: dir });
       const { inputSchema } = getTool(server, 'search_notes');
       const parsed = inputSchema.safeParse({ query: 'x', limit: -1 });
       expect(parsed.success).toBe(false);
     });
 
     test('limit: 999999 fails Zod validation', () => {
-      const server = createMcpServer(noteStore, searchIndex, dir);
+      const server = createMcpServer(noteStore, searchIndex, { notesDir: dir });
       const { inputSchema } = getTool(server, 'search_notes');
       const parsed = inputSchema.safeParse({ query: 'x', limit: 999999 });
       expect(parsed.success).toBe(false);
     });
 
     test('limit: 1.5 (non-integer) fails Zod validation', () => {
-      const server = createMcpServer(noteStore, searchIndex, dir);
+      const server = createMcpServer(noteStore, searchIndex, { notesDir: dir });
       const { inputSchema } = getTool(server, 'search_notes');
       const parsed = inputSchema.safeParse({ query: 'x', limit: 1.5 });
       expect(parsed.success).toBe(false);
     });
 
     test('limit: 50 (in range) passes', () => {
-      const server = createMcpServer(noteStore, searchIndex, dir);
+      const server = createMcpServer(noteStore, searchIndex, { notesDir: dir });
       const { inputSchema } = getTool(server, 'search_notes');
       const parsed = inputSchema.safeParse({ query: 'x', limit: 50 });
       expect(parsed.success).toBe(true);
     });
 
     test('limit: omitted (undefined) passes — falls back to default', () => {
-      const server = createMcpServer(noteStore, searchIndex, dir);
+      const server = createMcpServer(noteStore, searchIndex, { notesDir: dir });
       const { inputSchema } = getTool(server, 'search_notes');
       const parsed = inputSchema.safeParse({ query: 'x' });
       expect(parsed.success).toBe(true);
@@ -875,7 +875,7 @@ describe('withToolError helper (issue #50)', () => {
     const originalList = noteStore.list.bind(noteStore);
     noteStore.list = async () => { throw new Error('synthetic failure'); };
     try {
-      const server = createMcpServer(noteStore, searchIndex, dir);
+      const server = createMcpServer(noteStore, searchIndex, { notesDir: dir });
       const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown, extra: unknown) => Promise<{ isError?: boolean; content: { type: string; text: string }[] }> }> })._registeredTools;
       const result = await tools['list_notes'].handler({}, {});
       expect(result.isError).toBe(true);
@@ -890,7 +890,7 @@ describe('withToolError helper (issue #50)', () => {
     const originalSearch = searchIndex.search.bind(searchIndex);
     searchIndex.search = () => { throw new Error('boom'); };
     try {
-      const server = createMcpServer(noteStore, searchIndex, dir);
+      const server = createMcpServer(noteStore, searchIndex, { notesDir: dir });
       const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown, extra: unknown) => Promise<{ isError?: boolean; content: { type: string; text: string }[] }> }> })._registeredTools;
       const result = await tools['search_notes'].handler({ query: 'x', limit: 10 }, {});
       expect(result.isError).toBe(true);
@@ -1008,7 +1008,7 @@ describe('frontmatter passthrough — MCP handler integration', () => {
     noteStore = new NoteStore(dir);
     searchIndex = new SearchIndex();
     await noteStore.initialize();
-    server = createMcpServer(noteStore, searchIndex, dir);
+    server = createMcpServer(noteStore, searchIndex, { notesDir: dir });
   });
 
   afterEach(async () => {
@@ -1155,7 +1155,7 @@ describe('append_to_section — MCP handler integration', () => {
     noteStore = new NoteStore(dir);
     searchIndex = new SearchIndex();
     await noteStore.initialize();
-    server = createMcpServer(noteStore, searchIndex, dir);
+    server = createMcpServer(noteStore, searchIndex, { notesDir: dir });
   });
 
   afterEach(async () => {
@@ -1295,7 +1295,7 @@ describe('edit_note — MCP handler integration', () => {
     noteStore = new NoteStore(dir);
     searchIndex = new SearchIndex();
     await noteStore.initialize();
-    server = createMcpServer(noteStore, searchIndex, dir);
+    server = createMcpServer(noteStore, searchIndex, { notesDir: dir });
   });
 
   afterEach(async () => {
@@ -1448,7 +1448,7 @@ describe('edit_frontmatter — MCP handler integration', () => {
     noteStore = new NoteStore(dir);
     searchIndex = new SearchIndex();
     await noteStore.initialize();
-    server = createMcpServer(noteStore, searchIndex, dir);
+    server = createMcpServer(noteStore, searchIndex, { notesDir: dir });
   });
 
   afterEach(async () => {
@@ -1630,5 +1630,141 @@ describe('edit_frontmatter — MCP handler integration', () => {
   test('schema: slug alone parses (the "must supply an op" rule is a handler-level no_ops error)', () => {
     const { inputSchema } = getTool('edit_frontmatter');
     expect(inputSchema.safeParse({ slug: 'doc' }).success).toBe(true);
+  });
+});
+
+describe('exclude_tags — MCP handler integration (issue #84)', () => {
+  let dir: string;
+  let noteStore: NoteStore;
+  let searchIndex: SearchIndex;
+
+  beforeEach(async () => {
+    dir = await makeTmpDir();
+    noteStore = new NoteStore(dir);
+    searchIndex = new SearchIndex();
+    await noteStore.initialize();
+  });
+
+  afterEach(async () => {
+    await noteStore.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  // Build a server with an explicit default-exclude set, so tests state intent.
+  function buildServer(defaultExcludeTags: string[]) {
+    return createMcpServer(noteStore, searchIndex, { notesDir: dir, defaultExcludeTags });
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function getTool(server: any, name: string) {
+    const reg = server._registeredTools[name];
+    if (!reg) throw new Error(`tool not registered: ${name}`);
+    return reg;
+  }
+
+  async function reindex() {
+    searchIndex.buildIndexWithContent(await noteStore.listWithContent());
+  }
+
+  async function seedActiveAndArchived() {
+    await noteStore.upsert({ title: 'Active Note', content: 'commonword body here', tags: ['active'] });
+    await noteStore.upsert({ title: 'Archived Note', content: 'commonword body here', tags: ['archived'] });
+  }
+
+  // ── list_notes ──
+  test('list_notes hides notes carrying a default-excluded tag', async () => {
+    await seedActiveAndArchived();
+    const server = buildServer(['archived', 'historical']);
+    const res = await getTool(server, 'list_notes').handler({}, {});
+    const slugs = JSON.parse(res.content[0].text).map((n: { slug: string }) => n.slug);
+    expect(slugs).toEqual(['active-note']);
+  });
+
+  test('list_notes exclude_tags: [] opts back in to the archived note', async () => {
+    await seedActiveAndArchived();
+    const server = buildServer(['archived', 'historical']);
+    const res = await getTool(server, 'list_notes').handler({ exclude_tags: [] }, {});
+    const slugs = JSON.parse(res.content[0].text).map((n: { slug: string }) => n.slug).sort();
+    expect(slugs).toEqual(['active-note', 'archived-note']);
+  });
+
+  test('list_notes explicit exclude_tags replaces the default set', async () => {
+    await seedActiveAndArchived();
+    // Exclude 'active' instead — the archived note now shows, the active one hides.
+    const server = buildServer(['archived']);
+    const res = await getTool(server, 'list_notes').handler({ exclude_tags: ['active'] }, {});
+    const slugs = JSON.parse(res.content[0].text).map((n: { slug: string }) => n.slug);
+    expect(slugs).toEqual(['archived-note']);
+  });
+
+  test('list_notes exclusion composes with the path prefix filter', async () => {
+    await noteStore.upsert({ slug: 'projects/live', title: 'Live', content: 'x', tags: ['active'] });
+    await noteStore.upsert({ slug: 'projects/old', title: 'Old', content: 'x', tags: ['archived'] });
+    await noteStore.upsert({ slug: 'inbox/other', title: 'Other', content: 'x', tags: ['active'] });
+    const server = buildServer(['archived']);
+    const res = await getTool(server, 'list_notes').handler({ path: 'projects' }, {});
+    const slugs = JSON.parse(res.content[0].text).map((n: { slug: string }) => n.slug);
+    expect(slugs).toEqual(['projects/live']);
+  });
+
+  // ── search_notes ──
+  test('search_notes hides default-excluded notes', async () => {
+    await seedActiveAndArchived();
+    await reindex();
+    const server = buildServer(['archived', 'historical']);
+    const res = await getTool(server, 'search_notes').handler({ query: 'commonword' }, {});
+    const slugs = JSON.parse(res.content[0].text).map((n: { slug: string }) => n.slug);
+    expect(slugs).toEqual(['active-note']);
+  });
+
+  test('search_notes exclude_tags: [] returns the archived match', async () => {
+    await seedActiveAndArchived();
+    await reindex();
+    const server = buildServer(['archived', 'historical']);
+    const res = await getTool(server, 'search_notes').handler({ query: 'commonword', exclude_tags: [] }, {});
+    const slugs = JSON.parse(res.content[0].text).map((n: { slug: string }) => n.slug).sort();
+    expect(slugs).toEqual(['active-note', 'archived-note']);
+  });
+
+  // ── list_todos ──
+  test('list_todos hides todos from default-excluded notes', async () => {
+    await noteStore.upsert({ title: 'Live Tasks', content: '- [ ] do a thing', tags: ['active'] });
+    await noteStore.upsert({ title: 'Old Tasks', content: '- [ ] stale thing', tags: ['archived'] });
+    const server = buildServer(['archived']);
+    const res = await getTool(server, 'list_todos').handler({}, {});
+    const slugs = JSON.parse(res.content[0].text).map((n: { slug: string }) => n.slug);
+    expect(slugs).toEqual(['live-tasks']);
+  });
+
+  test('list_todos exclude_tags: [] includes the archived note\'s todos', async () => {
+    await noteStore.upsert({ title: 'Live Tasks', content: '- [ ] do a thing', tags: ['active'] });
+    await noteStore.upsert({ title: 'Old Tasks', content: '- [ ] stale thing', tags: ['archived'] });
+    const server = buildServer(['archived']);
+    const res = await getTool(server, 'list_todos').handler({ exclude_tags: [] }, {});
+    const slugs = JSON.parse(res.content[0].text).map((n: { slug: string }) => n.slug).sort();
+    expect(slugs).toEqual(['live-tasks', 'old-tasks']);
+  });
+
+  // ── access symmetry ──
+  test('get_note still returns an archived note by direct slug', async () => {
+    await seedActiveAndArchived();
+    const server = buildServer(['archived', 'historical']);
+    const res = await getTool(server, 'get_note').handler({ slug: 'archived-note' }, {});
+    expect(res.isError).toBeFalsy();
+    expect(res.content[0].text).toContain('Archived Note');
+  });
+
+  // ── schema ──
+  test('exclude_tags schema accepts a string array and rejects non-arrays', () => {
+    const server = buildServer([]);
+    for (const tool of ['search_notes', 'list_notes', 'list_todos']) {
+      const { inputSchema } = getTool(server, tool);
+      const base = tool === 'search_notes' ? { query: 'x' } : {};
+      expect(inputSchema.safeParse({ ...base, exclude_tags: ['archived'] }).success).toBe(true);
+      expect(inputSchema.safeParse({ ...base, exclude_tags: [] }).success).toBe(true);
+      expect(inputSchema.safeParse({ ...base }).success).toBe(true); // omitted is valid
+      expect(inputSchema.safeParse({ ...base, exclude_tags: 'archived' }).success).toBe(false);
+      expect(inputSchema.safeParse({ ...base, exclude_tags: [1, 2] }).success).toBe(false);
+    }
   });
 });

@@ -338,4 +338,47 @@ describe('SearchIndex', () => {
     expect(results[0].slug).toBe('real');
     expect(Number.isFinite(results[0].score)).toBe(true);
   });
+
+  describe('issue #84: exclude_tags', () => {
+    test('no exclude set (default arg) returns all matches — back-compat', () => {
+      index.buildIndex([
+        makeNote('a', 'Common Note', ['archived']),
+        makeNote('b', 'Common Note', ['active']),
+      ]);
+      const results = index.search('common');
+      expect(results.map((r) => r.slug).sort()).toEqual(['a', 'b']);
+    });
+
+    test('drops entries carrying an excluded tag', () => {
+      index.buildIndex([
+        makeNote('a', 'Common Note', ['archived']),
+        makeNote('b', 'Common Note', ['active']),
+      ]);
+      const results = index.search('common', 10, ['archived']);
+      expect(results.map((r) => r.slug)).toEqual(['b']);
+    });
+
+    test('exclusion is case-insensitive', () => {
+      index.buildIndex([makeNote('a', 'Common Note', ['Archived'])]);
+      expect(index.search('common', 10, ['archived'])).toHaveLength(0);
+    });
+
+    test('filters before the limit slice — results still fill to limit', () => {
+      // 3 archived + 5 active, all matching. limit=5 should yield 5 active,
+      // not 5 minus however many archived happened to sort first.
+      const notes = [
+        ...Array.from({ length: 3 }, (_, i) => makeNote(`arch-${i}`, 'Common Note', ['archived'])),
+        ...Array.from({ length: 5 }, (_, i) => makeNote(`live-${i}`, 'Common Note', ['active'])),
+      ];
+      index.buildIndex(notes);
+      const results = index.search('common', 5, ['archived']);
+      expect(results).toHaveLength(5);
+      expect(results.every((r) => r.slug.startsWith('live-'))).toBe(true);
+    });
+
+    test('empty exclude list excludes nothing', () => {
+      index.buildIndex([makeNote('a', 'Common Note', ['archived'])]);
+      expect(index.search('common', 10, [])).toHaveLength(1);
+    });
+  });
 });
