@@ -30,11 +30,24 @@ export function isValidSlug(slug: string): boolean {
   return true;
 }
 
-export function slugValidationError(slug: string) {
-  return {
-    isError: true as const,
-    content: [{ type: 'text' as const, text: `Invalid slug "${slug}": must be a non-empty relative path without "..", null bytes, or leading/trailing "/"` }],
-  };
+type ToolResponse = {
+  content: Array<{ type: 'text'; text: string }>;
+  isError?: boolean;
+};
+
+// The two response shapes every tool handler returns: `ok(text)` for success,
+// `err(text)` for a caller-facing error (isError: true). `slugValidationError`
+// and `withToolError` are specializations that route through `err`.
+function ok(text: string): ToolResponse {
+  return { content: [{ type: 'text', text }] };
+}
+
+function err(text: string): ToolResponse {
+  return { isError: true, content: [{ type: 'text', text }] };
+}
+
+export function slugValidationError(slug: string): ToolResponse {
+  return err(`Invalid slug "${slug}": must be a non-empty relative path without "..", null bytes, or leading/trailing "/"`);
 }
 
 export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, notesDir: string): McpServer {
@@ -43,18 +56,20 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
     version: '1.0.0',
   });
 
-  type ToolResponse = {
-    content: Array<{ type: 'text'; text: string }>;
-    isError?: boolean;
-  };
-
   async function withToolError(prefix: string, fn: () => Promise<ToolResponse>): Promise<ToolResponse> {
     try {
       return await fn();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      return { isError: true, content: [{ type: 'text', text: `${prefix}: ${msg}` }] };
+      return err(`${prefix}: ${msg}`);
     }
+  }
+
+  // Rebuild the search index from the full note corpus. Called after every write
+  // so subsequent searches see the change without waiting for the watcher tick.
+  async function rebuildIndex(): Promise<void> {
+    const allNotes = await noteStore.listWithContent();
+    searchIndex.buildIndexWithContent(allNotes);
   }
 
   // ── Tools ──────────────────────────────────────────────────────────────────
@@ -69,7 +84,7 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
     async () =>
       withToolError('Failed to load vault context', async () => {
         const result = await vaultContextHandler(notesDir);
-        return { content: [{ type: 'text', text: result.contents[0].text }] };
+        return ok(result.contents[0].text);
       })
   );
 
@@ -84,7 +99,7 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
         const notes = await noteStore.list();
         const normalized = prefix && (prefix.endsWith('/') ? prefix : prefix + '/');
         const filtered = normalized ? notes.filter((n) => n.slug.startsWith(normalized)) : notes;
-        return { content: [{ type: 'text', text: JSON.stringify(filtered, null, 2) }] };
+        return ok(JSON.stringify(filtered, null, 2));
       })
   );
 
@@ -97,9 +112,9 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
       return withToolError(`Failed to read note "${slug}"`, async () => {
         const note = await noteStore.get(slug);
         if (!note) {
-          return { isError: true, content: [{ type: 'text', text: `Note "${slug}" not found.` }] };
+          return err(`Note "${slug}" not found.`);
         }
-        return { content: [{ type: 'text', text: note.raw }] };
+        return ok(note.raw);
       });
     }
   );
@@ -126,10 +141,7 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
       if (frontmatter) {
         for (const key of Object.keys(frontmatter)) {
           if (FRONTMATTER_DENYLIST.has(key)) {
-            return {
-              isError: true,
-              content: [{ type: 'text', text: `Cannot set '${key}' via frontmatter; use the typed param.` }],
-            };
+            return err(`Cannot set '${key}' via frontmatter; use the typed param.`);
           }
         }
       }
@@ -138,21 +150,15 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
       try {
         const existing = await noteStore.get(slug);
         if (existing) {
-          return {
-            isError: true,
-            content: [{ type: 'text', text: `Note already exists at "${slug}" — use update_note to modify it.` }],
-          };
+          return err(`Note already exists at "${slug}" — use update_note to modify it.`);
         }
         note = await noteStore.upsert({ slug, title, content, tags, related, frontmatter });
-        const allNotes = await noteStore.listWithContent();
-        searchIndex.buildIndexWithContent(allNotes);
+        await rebuildIndex();
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        return { isError: true, content: [{ type: 'text', text: `Failed to write note "${slug}": ${msg}` }] };
+        return err(`Failed to write note "${slug}": ${msg}`);
       }
-      return {
-        content: [{ type: 'text', text: `Created note "${note.frontmatter.title}" with slug "${note.slug}".` }],
-      };
+      return ok(`Created note "${note.frontmatter.title}" with slug "${note.slug}".`);
     }
   );
 
@@ -180,14 +186,11 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
       try {
         const existing = await noteStore.get(slug);
         if (!existing) {
-          return {
-            content: [{ type: 'text', text: `Note "${slug}" not found.` }],
-            isError: true,
-          };
+          return err(`Note "${slug}" not found.`);
         }
         const resolved = resolveFrontmatterParams({ title, content, tags, related, frontmatter });
         if (!resolved.ok) {
-          return { isError: true, content: [{ type: 'text', text: resolved.error }] };
+          return err(resolved.error);
         }
         note = await noteStore.upsert({
           slug,
@@ -197,15 +200,12 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
           related: resolved.related,
           frontmatter: resolved.frontmatter,
         });
-        const allNotes = await noteStore.listWithContent();
-        searchIndex.buildIndexWithContent(allNotes);
+        await rebuildIndex();
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        return { isError: true, content: [{ type: 'text', text: `Failed to write note "${slug}": ${msg}` }] };
+        return err(`Failed to write note "${slug}": ${msg}`);
       }
-      return {
-        content: [{ type: 'text', text: `Updated note "${note.frontmatter.title}" (slug: "${note.slug}").` }],
-      };
+      return ok(`Updated note "${note.frontmatter.title}" (slug: "${note.slug}").`);
     }
   );
 
@@ -230,21 +230,15 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
       try {
         const note = await noteStore.get(slug);
         if (!note) {
-          return { isError: true, content: [{ type: 'text', text: `Note "${slug}" not found.` }] };
+          return err(`Note "${slug}" not found.`);
         }
         const result = appendToSection(note.content, heading, content, create_if_missing);
         if (!result.ok) {
           if (result.reason === 'missing') {
             const list = result.headings.length ? result.headings.map((h) => `"${h}"`).join(', ') : '(none)';
-            return {
-              isError: true,
-              content: [{ type: 'text', text: `Heading "${heading}" not found in "${slug}". Existing headings: ${list}. Pass create_if_missing=true to create it.` }],
-            };
+            return err(`Heading "${heading}" not found in "${slug}". Existing headings: ${list}. Pass create_if_missing=true to create it.`);
           }
-          return {
-            isError: true,
-            content: [{ type: 'text', text: `Heading "${heading}" is ambiguous — matches ${result.count} headings in "${slug}". Use a more specific or nested heading.` }],
-          };
+          return err(`Heading "${heading}" is ambiguous — matches ${result.count} headings in "${slug}". Use a more specific or nested heading.`);
         }
         const updated = new Date().toISOString().split('T')[0];
         written = await noteStore.upsert({
@@ -255,13 +249,12 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
           related: note.frontmatter.related,
           frontmatter: { updated },
         });
-        const allNotes = await noteStore.listWithContent();
-        searchIndex.buildIndexWithContent(allNotes);
+        await rebuildIndex();
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        return { isError: true, content: [{ type: 'text', text: `Failed to append to note "${slug}": ${msg}` }] };
+        return err(`Failed to append to note "${slug}": ${msg}`);
       }
-      return { content: [{ type: 'text', text: written.raw }] };
+      return ok(written.raw);
     }
   );
 
@@ -287,26 +280,17 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
       try {
         const note = await noteStore.get(slug);
         if (!note) {
-          return { isError: true, content: [{ type: 'text', text: `Note "${slug}" not found.` }] };
+          return err(`Note "${slug}" not found.`);
         }
         const result = editBody(note.content, old_string, new_string, replace_all);
         if (!result.ok) {
           if (result.reason === 'not_found') {
-            return {
-              isError: true,
-              content: [{ type: 'text', text: `old_string not found in "${slug}". It must match the note body exactly, including whitespace (frontmatter is not editable via this tool).` }],
-            };
+            return err(`old_string not found in "${slug}". It must match the note body exactly, including whitespace (frontmatter is not editable via this tool).`);
           }
           if (result.reason === 'no_change') {
-            return {
-              isError: true,
-              content: [{ type: 'text', text: `old_string and new_string are identical — no change to make in "${slug}".` }],
-            };
+            return err(`old_string and new_string are identical — no change to make in "${slug}".`);
           }
-          return {
-            isError: true,
-            content: [{ type: 'text', text: `old_string is not unique — matches ${result.count} places in "${slug}". Provide a longer, more specific old_string or pass replace_all=true.` }],
-          };
+          return err(`old_string is not unique — matches ${result.count} places in "${slug}". Provide a longer, more specific old_string or pass replace_all=true.`);
         }
         const updated = new Date().toISOString().split('T')[0];
         written = await noteStore.upsert({
@@ -317,13 +301,12 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
           related: note.frontmatter.related,
           frontmatter: { updated },
         });
-        const allNotes = await noteStore.listWithContent();
-        searchIndex.buildIndexWithContent(allNotes);
+        await rebuildIndex();
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        return { isError: true, content: [{ type: 'text', text: `Failed to edit note "${slug}": ${msg}` }] };
+        return err(`Failed to edit note "${slug}": ${msg}`);
       }
-      return { content: [{ type: 'text', text: written.raw }] };
+      return ok(written.raw);
     }
   );
 
@@ -355,10 +338,7 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
             const lever = key === 'tags' || key === 'related'
               ? `add_${key}/remove_${key}`
               : 'the typed update_note param';
-            return {
-              isError: true,
-              content: [{ type: 'text', text: `Cannot set '${key}' via set; use ${lever}.` }],
-            };
+            return err(`Cannot set '${key}' via set; use ${lever}.`);
           }
         }
       }
@@ -375,7 +355,7 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
       try {
         const note = await noteStore.get(slug);
         if (!note) {
-          return { isError: true, content: [{ type: 'text', text: `Note "${slug}" not found.` }] };
+          return err(`Note "${slug}" not found.`);
         }
         const result = applyFrontmatterEdit(
           {
@@ -387,22 +367,13 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
         );
         if (!result.ok) {
           if (result.reason === 'no_ops') {
-            return {
-              isError: true,
-              content: [{ type: 'text', text: `edit_frontmatter on "${slug}" changed nothing — supply at least one of set, add_tags, remove_tags, add_related, remove_related.` }],
-            };
+            return err(`edit_frontmatter on "${slug}" changed nothing — supply at least one of set, add_tags, remove_tags, add_related, remove_related.`);
           }
           if (result.reason === 'conflict') {
-            return {
-              isError: true,
-              content: [{ type: 'text', text: `${result.field} lists both add and remove of: ${result.entries.join(', ')} — incoherent, pick one.` }],
-            };
+            return err(`${result.field} lists both add and remove of: ${result.entries.join(', ')} — incoherent, pick one.`);
           }
           // no_change
-          return {
-            isError: true,
-            content: [{ type: 'text', text: `edit_frontmatter on "${slug}" is a no-op — all adds already present, all removes absent, and set matches the current frontmatter.` }],
-          };
+          return err(`edit_frontmatter on "${slug}" is a no-op — all adds already present, all removes absent, and set matches the current frontmatter.`);
         }
         const updated = new Date().toISOString().split('T')[0];
         // result.tags / result.related go straight to upsert's typed params —
@@ -418,13 +389,12 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
           related: result.related,
           frontmatter: { ...result.extras, updated },
         });
-        const allNotes = await noteStore.listWithContent();
-        searchIndex.buildIndexWithContent(allNotes);
+        await rebuildIndex();
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        return { isError: true, content: [{ type: 'text', text: `Failed to edit frontmatter of note "${slug}": ${msg}` }] };
+        return err(`Failed to edit frontmatter of note "${slug}": ${msg}`);
       }
-      return { content: [{ type: 'text', text: written.raw }] };
+      return ok(written.raw);
     }
   );
 
@@ -437,17 +407,16 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
       const result = await withToolError(`Failed to delete note "${slug}"`, async () => {
         const deleted = await noteStore.delete(slug);
         if (!deleted) {
-          return { isError: true, content: [{ type: 'text', text: `Note "${slug}" not found.` }] };
+          return err(`Note "${slug}" not found.`);
         }
-        return { content: [{ type: 'text', text: `Deleted note "${slug}".` }] };
+        return ok(`Deleted note "${slug}".`);
       });
       // Secondary best-effort: rebuild the search index after a successful delete.
       // A failure here is logged but does not change the response — the deletion
       // itself succeeded, and the index will catch up on the next watcher tick.
       if (!result.isError) {
         try {
-          const allNotes = await noteStore.listWithContent();
-          searchIndex.buildIndexWithContent(allNotes);
+          await rebuildIndex();
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
           console.error(`[library] Failed to rebuild search index after deleting "${slug}":`, msg);
@@ -468,9 +437,9 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
       withToolError('Search failed', async () => {
         const results = searchIndex.search(query, limit ?? 10);
         if (results.length === 0) {
-          return { content: [{ type: 'text', text: `No notes found matching "${query}".` }] };
+          return ok(`No notes found matching "${query}".`);
         }
-        return { content: [{ type: 'text', text: JSON.stringify(results, null, 2) }] };
+        return ok(JSON.stringify(results, null, 2));
       })
   );
 
@@ -499,9 +468,9 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
           .slice(0, limit ?? 10);
 
         if (withTodos.length === 0) {
-          return { content: [{ type: 'text', text: 'No notes found with incomplete TODOs.' }] };
+          return ok('No notes found with incomplete TODOs.');
         }
-        return { content: [{ type: 'text', text: JSON.stringify(withTodos, null, 2) }] };
+        return ok(JSON.stringify(withTodos, null, 2));
       })
   );
 
@@ -518,31 +487,27 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
       if (!isValidSlug(slug)) return slugValidationError(slug);
       if (!isValidSlug(new_slug)) return slugValidationError(new_slug);
       if (slug === new_slug) {
-        return { isError: true, content: [{ type: 'text', text: 'Source and target slugs are the same.' }] };
+        return err('Source and target slugs are the same.');
       }
 
       try {
         const { updatedRefs } = await noteStore.move(slug, new_slug);
-        const allNotes = await noteStore.listWithContent();
-        searchIndex.buildIndexWithContent(allNotes);
+        await rebuildIndex();
 
         let msg = `Moved note from "${slug}" to "${new_slug}".`;
         if (updatedRefs.length > 0) {
           msg += ` Updated references in ${updatedRefs.length} note(s): ${updatedRefs.join(', ')}.`;
         }
-        return { content: [{ type: 'text', text: msg }] };
+        return ok(msg);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         // Surface the "already exists" case with user-friendly guidance.
         // The underlying error message contains the absolute target path
         // (from writeAtomically); we match on the prefix instead of the slug.
         if (msg.startsWith('Note already exists at "')) {
-          return {
-            isError: true,
-            content: [{ type: 'text', text: `Note already exists at "${new_slug}" — choose a different slug.` }],
-          };
+          return err(`Note already exists at "${new_slug}" — choose a different slug.`);
         }
-        return { isError: true, content: [{ type: 'text', text: `Failed to move note "${slug}": ${msg}` }] };
+        return err(`Failed to move note "${slug}": ${msg}`);
       }
     }
   );
