@@ -8,6 +8,7 @@ import { coerceStringArray, resolveFrontmatterParams, FRONTMATTER_DENYLIST } fro
 import { extractTodos } from '../notes/todos.js';
 import { appendToSection, editBody } from '../notes/sections.js';
 import { applyFrontmatterEdit } from '../notes/frontmatter.js';
+import type { Note } from '../types.js';
 
 export async function vaultContextHandler(notesDir: string) {
   try {
@@ -70,6 +71,51 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
   async function rebuildIndex(): Promise<void> {
     const allNotes = await noteStore.listWithContent();
     searchIndex.buildIndexWithContent(allNotes);
+  }
+
+  // The shared skeleton of the surgical body/frontmatter mutators
+  // (append_to_section, edit_note, edit_frontmatter): validate the slug, load the
+  // note, run a pure `transform`, and on success stamp "updated", upsert, rebuild
+  // the index, and return the full written note. `transform` carries the only
+  // per-tool differences — the transform call, its reason→message table, and which
+  // upsert fields change (body edits keep the note's tags/related; frontmatter
+  // edits keep the body and supply new tags/related/extras). The success shape's
+  // omitted `frontmatter` spreads to `{ updated }`, matching the body-edit path.
+  type SurgicalWriteResult =
+    | { ok: true; content: string; tags?: string[]; related?: string[]; frontmatter?: Record<string, unknown> }
+    | { ok: false; message: string };
+
+  async function surgicalWrite(
+    slug: string,
+    failPrefix: string,
+    transform: (note: Note) => SurgicalWriteResult,
+  ): Promise<ToolResponse> {
+    if (!isValidSlug(slug)) return slugValidationError(slug);
+    let written;
+    try {
+      const note = await noteStore.get(slug);
+      if (!note) {
+        return err(`Note "${slug}" not found.`);
+      }
+      const result = transform(note);
+      if (!result.ok) {
+        return err(result.message);
+      }
+      const updated = new Date().toISOString().split('T')[0];
+      written = await noteStore.upsert({
+        slug,
+        title: note.frontmatter.title,
+        content: result.content,
+        tags: result.tags,
+        related: result.related,
+        frontmatter: { ...result.frontmatter, updated },
+      });
+      await rebuildIndex();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return err(`${failPrefix} "${slug}": ${msg}`);
+    }
+    return ok(written.raw);
   }
 
   // ── Tools ──────────────────────────────────────────────────────────────────
@@ -224,38 +270,18 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
         'Defaults to false — a missing heading errors with the note\'s existing headings so you can correct it.'
       ),
     },
-    async ({ slug, heading, content, create_if_missing }) => {
-      if (!isValidSlug(slug)) return slugValidationError(slug);
-      let written;
-      try {
-        const note = await noteStore.get(slug);
-        if (!note) {
-          return err(`Note "${slug}" not found.`);
-        }
+    async ({ slug, heading, content, create_if_missing }) =>
+      surgicalWrite(slug, 'Failed to append to note', (note) => {
         const result = appendToSection(note.content, heading, content, create_if_missing);
         if (!result.ok) {
           if (result.reason === 'missing') {
             const list = result.headings.length ? result.headings.map((h) => `"${h}"`).join(', ') : '(none)';
-            return err(`Heading "${heading}" not found in "${slug}". Existing headings: ${list}. Pass create_if_missing=true to create it.`);
+            return { ok: false, message: `Heading "${heading}" not found in "${slug}". Existing headings: ${list}. Pass create_if_missing=true to create it.` };
           }
-          return err(`Heading "${heading}" is ambiguous — matches ${result.count} headings in "${slug}". Use a more specific or nested heading.`);
+          return { ok: false, message: `Heading "${heading}" is ambiguous — matches ${result.count} headings in "${slug}". Use a more specific or nested heading.` };
         }
-        const updated = new Date().toISOString().split('T')[0];
-        written = await noteStore.upsert({
-          slug,
-          title: note.frontmatter.title,
-          content: result.body,
-          tags: note.frontmatter.tags,
-          related: note.frontmatter.related,
-          frontmatter: { updated },
-        });
-        await rebuildIndex();
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        return err(`Failed to append to note "${slug}": ${msg}`);
-      }
-      return ok(written.raw);
-    }
+        return { ok: true, content: result.body, tags: note.frontmatter.tags, related: note.frontmatter.related };
+      })
   );
 
   server.tool(
@@ -274,40 +300,20 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
         'Defaults to false — a non-unique old_string errors with the match count so you can disambiguate.'
       ),
     },
-    async ({ slug, old_string, new_string, replace_all }) => {
-      if (!isValidSlug(slug)) return slugValidationError(slug);
-      let written;
-      try {
-        const note = await noteStore.get(slug);
-        if (!note) {
-          return err(`Note "${slug}" not found.`);
-        }
+    async ({ slug, old_string, new_string, replace_all }) =>
+      surgicalWrite(slug, 'Failed to edit note', (note) => {
         const result = editBody(note.content, old_string, new_string, replace_all);
         if (!result.ok) {
           if (result.reason === 'not_found') {
-            return err(`old_string not found in "${slug}". It must match the note body exactly, including whitespace (frontmatter is not editable via this tool).`);
+            return { ok: false, message: `old_string not found in "${slug}". It must match the note body exactly, including whitespace (frontmatter is not editable via this tool).` };
           }
           if (result.reason === 'no_change') {
-            return err(`old_string and new_string are identical — no change to make in "${slug}".`);
+            return { ok: false, message: `old_string and new_string are identical — no change to make in "${slug}".` };
           }
-          return err(`old_string is not unique — matches ${result.count} places in "${slug}". Provide a longer, more specific old_string or pass replace_all=true.`);
+          return { ok: false, message: `old_string is not unique — matches ${result.count} places in "${slug}". Provide a longer, more specific old_string or pass replace_all=true.` };
         }
-        const updated = new Date().toISOString().split('T')[0];
-        written = await noteStore.upsert({
-          slug,
-          title: note.frontmatter.title,
-          content: result.body,
-          tags: note.frontmatter.tags,
-          related: note.frontmatter.related,
-          frontmatter: { updated },
-        });
-        await rebuildIndex();
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        return err(`Failed to edit note "${slug}": ${msg}`);
-      }
-      return ok(written.raw);
-    }
+        return { ok: true, content: result.body, tags: note.frontmatter.tags, related: note.frontmatter.related };
+      })
   );
 
   server.tool(
@@ -351,12 +357,7 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
         ? Object.fromEntries(Object.entries(set).filter(([k]) => k !== 'updated'))
         : undefined;
 
-      let written;
-      try {
-        const note = await noteStore.get(slug);
-        if (!note) {
-          return err(`Note "${slug}" not found.`);
-        }
+      return surgicalWrite(slug, 'Failed to edit frontmatter of note', (note) => {
         const result = applyFrontmatterEdit(
           {
             tags: note.frontmatter.tags,
@@ -367,34 +368,21 @@ export function createMcpServer(noteStore: NoteStore, searchIndex: SearchIndex, 
         );
         if (!result.ok) {
           if (result.reason === 'no_ops') {
-            return err(`edit_frontmatter on "${slug}" changed nothing — supply at least one of set, add_tags, remove_tags, add_related, remove_related.`);
+            return { ok: false, message: `edit_frontmatter on "${slug}" changed nothing — supply at least one of set, add_tags, remove_tags, add_related, remove_related.` };
           }
           if (result.reason === 'conflict') {
-            return err(`${result.field} lists both add and remove of: ${result.entries.join(', ')} — incoherent, pick one.`);
+            return { ok: false, message: `${result.field} lists both add and remove of: ${result.entries.join(', ')} — incoherent, pick one.` };
           }
           // no_change
-          return err(`edit_frontmatter on "${slug}" is a no-op — all adds already present, all removes absent, and set matches the current frontmatter.`);
+          return { ok: false, message: `edit_frontmatter on "${slug}" is a no-op — all adds already present, all removes absent, and set matches the current frontmatter.` };
         }
-        const updated = new Date().toISOString().split('T')[0];
         // result.tags / result.related go straight to upsert's typed params —
         // never through coerceStringArray, whose []→undefined "preserve" collapse
         // would make "remove the last tag" silently no-op. result.extras is the
-        // computed (existing + set) extras; `updated` is stamped here so it wins.
+        // computed (existing + set) extras; `updated` is stamped by surgicalWrite.
         // The body is passed through untouched; only frontmatter changes.
-        written = await noteStore.upsert({
-          slug,
-          title: note.frontmatter.title,
-          content: note.content,
-          tags: result.tags,
-          related: result.related,
-          frontmatter: { ...result.extras, updated },
-        });
-        await rebuildIndex();
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        return err(`Failed to edit frontmatter of note "${slug}": ${msg}`);
-      }
-      return ok(written.raw);
+        return { ok: true, content: note.content, tags: result.tags, related: result.related, frontmatter: result.extras };
+      });
     }
   );
 
