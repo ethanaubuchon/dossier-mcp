@@ -481,8 +481,9 @@ export class NoteStore extends EventEmitter {
 }
 
 // Returns frontmatter without the typed fields. Used by upsert to layer
-// existing non-typed extras under a caller's frontmatter param.
-function pickFrontmatterExtras(fm: NoteFrontmatter | undefined): Record<string, unknown> {
+// existing non-typed extras under a caller's frontmatter param, and by the
+// edit_frontmatter handler to read a note's current extras for a surgical edit.
+export function pickFrontmatterExtras(fm: NoteFrontmatter | undefined): Record<string, unknown> {
   if (!fm) return {};
   const { title, date, tags, related, ...extras } = fm;
   void title; void date; void tags; void related;

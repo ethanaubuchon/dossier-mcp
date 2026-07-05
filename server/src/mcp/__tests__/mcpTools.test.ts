@@ -1436,3 +1436,199 @@ describe('edit_note — MCP handler integration', () => {
     if (parsed.success) expect(parsed.data.replace_all).toBe(false);
   });
 });
+
+describe('edit_frontmatter — MCP handler integration', () => {
+  let dir: string;
+  let noteStore: NoteStore;
+  let searchIndex: SearchIndex;
+  let server: ReturnType<typeof createMcpServer>;
+
+  beforeEach(async () => {
+    dir = await makeTmpDir();
+    noteStore = new NoteStore(dir);
+    searchIndex = new SearchIndex();
+    await noteStore.initialize();
+    server = createMcpServer(noteStore, searchIndex, dir);
+  });
+
+  afterEach(async () => {
+    await noteStore.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  function getTool(name: string) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const reg = (server as any)._registeredTools[name];
+    if (!reg) throw new Error(`tool not registered: ${name}`);
+    return reg;
+  }
+
+  // Seed a note with an explicit (old) date so date-preservation is
+  // distinguishable from the today-stamped `updated`, plus tags/related/status.
+  async function seedDoc(): Promise<void> {
+    const raw = [
+      '---',
+      'title: Doc',
+      'date: 2020-01-01',
+      'tags:',
+      '  - a',
+      '  - b',
+      'related:',
+      '  - x/one',
+      'status: shaping',
+      '---',
+      '## Body',
+      '',
+      'the body — must stay byte-for-byte identical',
+      '',
+    ].join('\n');
+    await fs.writeFile(path.join(dir, 'doc.md'), raw, 'utf-8');
+  }
+
+  test('set-only edit: stamps updated, preserves date + body, sets the scalar', async () => {
+    await seedDoc();
+    const today = new Date().toISOString().split('T')[0];
+    const before = await noteStore.get('doc');
+    const res = await getTool('edit_frontmatter').handler({ slug: 'doc', set: { status: 'implemented' } });
+
+    expect(res.isError).toBeFalsy();
+    expect(res.content[0].text).toMatch(/^---\n/); // returns the full note (raw)
+    // Body byte-for-byte identical — checked both on the parsed body and on the
+    // returned raw bytes (guards against any body reflow on round-trip).
+    expect(res.content[0].text).toContain('## Body\n\nthe body — must stay byte-for-byte identical');
+    const after = await noteStore.get('doc');
+    expect(after!.content).toBe(before!.content);
+    expect(after!.frontmatter.status).toBe('implemented');
+    expect(after!.frontmatter.date).toBe('2020-01-01'); // preserved
+    expect(after!.frontmatter.updated).toBe(today); // stamped
+    expect(after!.frontmatter.tags).toEqual(['a', 'b']); // untouched
+    expect(after!.frontmatter.related).toEqual(['x/one']);
+  });
+
+  test('add/remove tags and related mutate the lists, body untouched', async () => {
+    await seedDoc();
+    const before = await noteStore.get('doc');
+    const res = await getTool('edit_frontmatter').handler({
+      slug: 'doc',
+      add_tags: ['c'],
+      remove_tags: ['a'],
+      add_related: ['x/two'],
+    });
+    expect(res.isError).toBeFalsy();
+    const after = await noteStore.get('doc');
+    expect(after!.frontmatter.tags).toEqual(['b', 'c']);
+    expect(after!.frontmatter.related).toEqual(['x/one', 'x/two']);
+    expect(after!.content).toBe(before!.content);
+  });
+
+  test('removing the last tag writes an empty array (not preserve-existing)', async () => {
+    await seedDoc();
+    const res = await getTool('edit_frontmatter').handler({ slug: 'doc', remove_tags: ['a', 'b'] });
+    expect(res.isError).toBeFalsy();
+    const after = await noteStore.get('doc');
+    expect(after!.frontmatter.tags).toEqual([]);
+  });
+
+  test('re-indexes so an added tag becomes searchable (SearchIndex weights tags)', async () => {
+    await seedDoc();
+    await getTool('edit_frontmatter').handler({ slug: 'doc', add_tags: ['zebradistincttag'] });
+    // search_notes reads the index; the tag is only findable if the handler
+    // rebuilt it — this would fail if buildIndexWithContent were dropped.
+    const searchRes = await getTool('search_notes').handler({ query: 'zebradistincttag' });
+    const found = JSON.parse(searchRes.content[0].text);
+    expect(found.some((r: { slug: string }) => r.slug === 'doc')).toBe(true);
+  });
+
+  test('add list dedupes intra-batch duplicates (single call)', async () => {
+    await seedDoc();
+    const res = await getTool('edit_frontmatter').handler({ slug: 'doc', add_tags: ['x', 'x', 'y'] });
+    expect(res.isError).toBeFalsy();
+    const after = await noteStore.get('doc');
+    expect(after!.frontmatter.tags).toEqual(['a', 'b', 'x', 'y']);
+  });
+
+  test('invalid slug → validation error', async () => {
+    const res = await getTool('edit_frontmatter').handler({ slug: '../escape', set: { status: 'x' } });
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toContain('Invalid slug');
+  });
+
+  test('missing note → not found', async () => {
+    const res = await getTool('edit_frontmatter').handler({ slug: 'nope', set: { status: 'x' } });
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toContain('not found');
+  });
+
+  test.each([
+    ['title', `Cannot set 'title' via set; use the typed update_note param.`],
+    ['date', `Cannot set 'date' via set; use the typed update_note param.`],
+    ['tags', `Cannot set 'tags' via set; use add_tags/remove_tags.`],
+    ['related', `Cannot set 'related' via set; use add_related/remove_related.`],
+  ])('set with denylisted key %s → error naming the right lever', async (key, message) => {
+    await seedDoc();
+    const res = await getTool('edit_frontmatter').handler({ slug: 'doc', set: { [key]: 'value' } });
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toBe(message);
+    // Note untouched: updated not stamped.
+    const after = await noteStore.get('doc');
+    expect(after!.frontmatter.updated).toBeUndefined();
+  });
+
+  test('same entry in add and remove → conflict, no write', async () => {
+    await seedDoc();
+    const res = await getTool('edit_frontmatter').handler({ slug: 'doc', add_tags: ['a'], remove_tags: ['a'] });
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toContain('both add and remove');
+    const after = await noteStore.get('doc');
+    expect(after!.frontmatter.updated).toBeUndefined();
+  });
+
+  test('no-op call → no_change error, note untouched', async () => {
+    await seedDoc();
+    const res = await getTool('edit_frontmatter').handler({ slug: 'doc', add_tags: ['a'], set: { status: 'shaping' } });
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toContain('no-op');
+    const after = await noteStore.get('doc');
+    expect(after!.frontmatter.updated).toBeUndefined();
+  });
+
+  test('no operations supplied → no_ops error', async () => {
+    await seedDoc();
+    const res = await getTool('edit_frontmatter').handler({ slug: 'doc' });
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toContain('changed nothing');
+  });
+
+  test('updated in set is ignored (auto-stamped, not caller-controlled)', async () => {
+    await seedDoc();
+    // updated-only set → nothing the caller can actually change → no_ops.
+    const only = await getTool('edit_frontmatter').handler({ slug: 'doc', set: { updated: '2020-05-05' } });
+    expect(only.isError).toBe(true);
+    expect(only.content[0].text).toContain('changed nothing');
+
+    // updated alongside a real change → the change applies; updated is today, not the supplied value.
+    const today = new Date().toISOString().split('T')[0];
+    const res = await getTool('edit_frontmatter').handler({ slug: 'doc', set: { status: 'implemented', updated: '2020-05-05' } });
+    expect(res.isError).toBeFalsy();
+    const after = await noteStore.get('doc');
+    expect(after!.frontmatter.status).toBe('implemented');
+    expect(after!.frontmatter.updated).toBe(today);
+  });
+
+  test('schema coerces comma-separated / JSON-array list inputs to string arrays', () => {
+    // Coercion happens at the schema boundary (z.preprocess), before the handler
+    // runs — so exercise the schema directly, as the other coercion tests do.
+    const { inputSchema } = getTool('edit_frontmatter');
+    const parsed = inputSchema.safeParse({ slug: 'doc', add_tags: 'c, d', remove_related: '["x/one"]' });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.add_tags).toEqual(['c', 'd']);
+      expect(parsed.data.remove_related).toEqual(['x/one']);
+    }
+  });
+
+  test('schema: slug alone parses (the "must supply an op" rule is a handler-level no_ops error)', () => {
+    const { inputSchema } = getTool('edit_frontmatter');
+    expect(inputSchema.safeParse({ slug: 'doc' }).success).toBe(true);
+  });
+});
