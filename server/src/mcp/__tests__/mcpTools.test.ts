@@ -19,6 +19,27 @@ async function makeTmpDir(): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), 'library-mcp-test-'));
 }
 
+/**
+ * Build a single-vault MCP server for the existing tests: wraps the one
+ * NoteStore/SearchIndex in a one-vault runtime registry named `default`. The
+ * "all = one" invariant — single-vault behavior must be identical to the
+ * pre-#89 single-store server — is what these migrated tests guard.
+ */
+function singleVaultServer(
+  noteStore: NoteStore,
+  searchIndex: SearchIndex,
+  dir: string,
+  opts: { defaultExcludeTags?: string[]; contextFile?: string } = {},
+) {
+  return createMcpServer(
+    {
+      vaults: [{ name: 'default', notesDir: dir, contextFile: opts.contextFile ?? 'profile.md', noteStore, searchIndex }],
+      defaultVault: 'default',
+    },
+    { defaultExcludeTags: opts.defaultExcludeTags },
+  );
+}
+
 describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
   let dir: string;
   let noteStore: NoteStore;
@@ -354,7 +375,7 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
     }
 
     test('rejects URI-encoded path traversal slug (note://%2e%2e%2fescape)', async () => {
-      const server = createMcpServer(noteStore, searchIndex, { notesDir: dir });
+      const server = singleVaultServer(noteStore, searchIndex, dir);
       const readCallback = getNoteResourceCallback(server);
 
       // %2e%2e%2fescape decodes to "../escape" — must be rejected by the guard.
@@ -494,7 +515,7 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
 
     test('returns empty-result message when no notes have todos', async () => {
       await noteStore.upsert({ title: 'Plain', content: 'No checkboxes here.' });
-      const server = createMcpServer(noteStore, searchIndex, { notesDir: dir });
+      const server = singleVaultServer(noteStore, searchIndex, dir);
       const result = await getTool(server, 'list_todos').handler({}, {});
       expect(result.content[0].text).toContain('No notes found with incomplete TODOs');
     });
@@ -506,7 +527,7 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
       });
       await noteStore.upsert({ title: 'Empty', content: 'no todos' });
 
-      const server = createMcpServer(noteStore, searchIndex, { notesDir: dir });
+      const server = singleVaultServer(noteStore, searchIndex, dir);
       const result = await getTool(server, 'list_todos').handler({}, {});
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed).toHaveLength(1);
@@ -520,7 +541,7 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
       await noteStore.upsert({ slug: 'projects/beta', title: 'Beta', content: '- [ ] beta task' });
       await noteStore.upsert({ slug: 'inbox/gamma', title: 'Gamma', content: '- [ ] gamma task' });
 
-      const server = createMcpServer(noteStore, searchIndex, { notesDir: dir });
+      const server = singleVaultServer(noteStore, searchIndex, dir);
       const result = await getTool(server, 'list_todos').handler({ path: 'projects' }, {});
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed).toHaveLength(2);
@@ -534,14 +555,14 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
       for (let i = 0; i < 5; i++) {
         await noteStore.upsert({ title: `Note ${i}`, content: `- [ ] task ${i}` });
       }
-      const server = createMcpServer(noteStore, searchIndex, { notesDir: dir });
+      const server = singleVaultServer(noteStore, searchIndex, dir);
       const result = await getTool(server, 'list_todos').handler({ limit: 2 }, {});
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed).toHaveLength(2);
     });
 
     test('limit out of bounds (0, 101, -1) fails Zod validation', () => {
-      const server = createMcpServer(noteStore, searchIndex, { notesDir: dir });
+      const server = singleVaultServer(noteStore, searchIndex, dir);
       const { inputSchema } = getTool(server, 'list_todos');
       expect(inputSchema.safeParse({ limit: 0 }).success).toBe(false);
       expect(inputSchema.safeParse({ limit: 101 }).success).toBe(false);
@@ -550,7 +571,7 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
     });
 
     test('omitted params are valid (use defaults)', () => {
-      const server = createMcpServer(noteStore, searchIndex, { notesDir: dir });
+      const server = singleVaultServer(noteStore, searchIndex, dir);
       const { inputSchema } = getTool(server, 'list_todos');
       expect(inputSchema.safeParse({}).success).toBe(true);
     });
@@ -559,7 +580,7 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
       const original = noteStore.listWithContent.bind(noteStore);
       noteStore.listWithContent = async () => { throw new Error('boom'); };
       try {
-        const server = createMcpServer(noteStore, searchIndex, { notesDir: dir });
+        const server = singleVaultServer(noteStore, searchIndex, dir);
         const result = await getTool(server, 'list_todos').handler({}, {});
         expect(result.isError).toBe(true);
         expect(result.content[0].text).toContain('boom');
@@ -629,42 +650,42 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
     }
 
     test('limit: 0 fails Zod validation', () => {
-      const server = createMcpServer(noteStore, searchIndex, { notesDir: dir });
+      const server = singleVaultServer(noteStore, searchIndex, dir);
       const { inputSchema } = getTool(server, 'search_notes');
       const parsed = inputSchema.safeParse({ query: 'x', limit: 0 });
       expect(parsed.success).toBe(false);
     });
 
     test('limit: -1 fails Zod validation', () => {
-      const server = createMcpServer(noteStore, searchIndex, { notesDir: dir });
+      const server = singleVaultServer(noteStore, searchIndex, dir);
       const { inputSchema } = getTool(server, 'search_notes');
       const parsed = inputSchema.safeParse({ query: 'x', limit: -1 });
       expect(parsed.success).toBe(false);
     });
 
     test('limit: 999999 fails Zod validation', () => {
-      const server = createMcpServer(noteStore, searchIndex, { notesDir: dir });
+      const server = singleVaultServer(noteStore, searchIndex, dir);
       const { inputSchema } = getTool(server, 'search_notes');
       const parsed = inputSchema.safeParse({ query: 'x', limit: 999999 });
       expect(parsed.success).toBe(false);
     });
 
     test('limit: 1.5 (non-integer) fails Zod validation', () => {
-      const server = createMcpServer(noteStore, searchIndex, { notesDir: dir });
+      const server = singleVaultServer(noteStore, searchIndex, dir);
       const { inputSchema } = getTool(server, 'search_notes');
       const parsed = inputSchema.safeParse({ query: 'x', limit: 1.5 });
       expect(parsed.success).toBe(false);
     });
 
     test('limit: 50 (in range) passes', () => {
-      const server = createMcpServer(noteStore, searchIndex, { notesDir: dir });
+      const server = singleVaultServer(noteStore, searchIndex, dir);
       const { inputSchema } = getTool(server, 'search_notes');
       const parsed = inputSchema.safeParse({ query: 'x', limit: 50 });
       expect(parsed.success).toBe(true);
     });
 
     test('limit: omitted (undefined) passes — falls back to default', () => {
-      const server = createMcpServer(noteStore, searchIndex, { notesDir: dir });
+      const server = singleVaultServer(noteStore, searchIndex, dir);
       const { inputSchema } = getTool(server, 'search_notes');
       const parsed = inputSchema.safeParse({ query: 'x' });
       expect(parsed.success).toBe(true);
@@ -875,7 +896,7 @@ describe('withToolError helper (issue #50)', () => {
     const originalList = noteStore.list.bind(noteStore);
     noteStore.list = async () => { throw new Error('synthetic failure'); };
     try {
-      const server = createMcpServer(noteStore, searchIndex, { notesDir: dir });
+      const server = singleVaultServer(noteStore, searchIndex, dir);
       const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown, extra: unknown) => Promise<{ isError?: boolean; content: { type: string; text: string }[] }> }> })._registeredTools;
       const result = await tools['list_notes'].handler({}, {});
       expect(result.isError).toBe(true);
@@ -890,7 +911,7 @@ describe('withToolError helper (issue #50)', () => {
     const originalSearch = searchIndex.search.bind(searchIndex);
     searchIndex.search = () => { throw new Error('boom'); };
     try {
-      const server = createMcpServer(noteStore, searchIndex, { notesDir: dir });
+      const server = singleVaultServer(noteStore, searchIndex, dir);
       const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown, extra: unknown) => Promise<{ isError?: boolean; content: { type: string; text: string }[] }> }> })._registeredTools;
       const result = await tools['search_notes'].handler({ query: 'x', limit: 10 }, {});
       expect(result.isError).toBe(true);
@@ -1008,7 +1029,7 @@ describe('frontmatter passthrough — MCP handler integration', () => {
     noteStore = new NoteStore(dir);
     searchIndex = new SearchIndex();
     await noteStore.initialize();
-    server = createMcpServer(noteStore, searchIndex, { notesDir: dir });
+    server = singleVaultServer(noteStore, searchIndex, dir);
   });
 
   afterEach(async () => {
@@ -1155,7 +1176,7 @@ describe('append_to_section — MCP handler integration', () => {
     noteStore = new NoteStore(dir);
     searchIndex = new SearchIndex();
     await noteStore.initialize();
-    server = createMcpServer(noteStore, searchIndex, { notesDir: dir });
+    server = singleVaultServer(noteStore, searchIndex, dir);
   });
 
   afterEach(async () => {
@@ -1295,7 +1316,7 @@ describe('edit_note — MCP handler integration', () => {
     noteStore = new NoteStore(dir);
     searchIndex = new SearchIndex();
     await noteStore.initialize();
-    server = createMcpServer(noteStore, searchIndex, { notesDir: dir });
+    server = singleVaultServer(noteStore, searchIndex, dir);
   });
 
   afterEach(async () => {
@@ -1448,7 +1469,7 @@ describe('edit_frontmatter — MCP handler integration', () => {
     noteStore = new NoteStore(dir);
     searchIndex = new SearchIndex();
     await noteStore.initialize();
-    server = createMcpServer(noteStore, searchIndex, { notesDir: dir });
+    server = singleVaultServer(noteStore, searchIndex, dir);
   });
 
   afterEach(async () => {
@@ -1652,7 +1673,7 @@ describe('exclude_tags — MCP handler integration (issue #84)', () => {
 
   // Build a server with an explicit default-exclude set, so tests state intent.
   function buildServer(defaultExcludeTags: string[]) {
-    return createMcpServer(noteStore, searchIndex, { notesDir: dir, defaultExcludeTags });
+    return singleVaultServer(noteStore, searchIndex, dir, { defaultExcludeTags });
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1765,6 +1786,60 @@ describe('exclude_tags — MCP handler integration (issue #84)', () => {
       expect(inputSchema.safeParse({ ...base }).success).toBe(true); // omitted is valid
       expect(inputSchema.safeParse({ ...base, exclude_tags: 'archived' }).success).toBe(false);
       expect(inputSchema.safeParse({ ...base, exclude_tags: [1, 2] }).success).toBe(false);
+    }
+  });
+});
+
+describe('vault param — schema surface (#89)', () => {
+  let dir: string;
+  let noteStore: NoteStore;
+  let searchIndex: SearchIndex;
+
+  beforeEach(async () => {
+    dir = await makeTmpDir();
+    noteStore = new NoteStore(dir);
+    searchIndex = new SearchIndex();
+    await noteStore.initialize();
+  });
+
+  afterEach(async () => {
+    await noteStore.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function getTool(server: any, name: string) {
+    const reg = server._registeredTools[name];
+    if (!reg) throw new Error(`tool not registered: ${name}`);
+    return reg;
+  }
+
+  // Minimal valid args (excluding vault) for every vault-scoped tool.
+  const TOOL_BASE: Record<string, Record<string, unknown>> = {
+    get_vault_context: {},
+    list_notes: {},
+    get_note: { slug: 'x' },
+    create_note: { title: 'X', content: 'body' },
+    update_note: { slug: 'x', content: 'body' },
+    append_to_section: { slug: 'x', heading: 'H', content: 'c' },
+    edit_note: { slug: 'x', old_string: 'a', new_string: 'b' },
+    edit_frontmatter: { slug: 'x' },
+    delete_note: { slug: 'x' },
+    search_notes: { query: 'x' },
+    list_todos: {},
+    move_note: { slug: 'x', new_slug: 'y' },
+  };
+
+  test('every vault-scoped tool accepts an optional string `vault` param', () => {
+    const server = singleVaultServer(noteStore, searchIndex, dir);
+    for (const [name, base] of Object.entries(TOOL_BASE)) {
+      const { inputSchema } = getTool(server, name);
+      // Omitted vault is valid (base args parse).
+      expect(inputSchema.safeParse({ ...base }).success).toBe(true);
+      // A string vault is valid.
+      expect(inputSchema.safeParse({ ...base, vault: 'work' }).success).toBe(true);
+      // A non-string vault is rejected.
+      expect(inputSchema.safeParse({ ...base, vault: 123 }).success).toBe(false);
     }
   });
 });
