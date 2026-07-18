@@ -9,18 +9,42 @@ import { extractTodos } from '../notes/todos.js';
 import { filterByExcludedTags } from '../notes/tagFilter.js';
 import { appendToSection, editBody } from '../notes/sections.js';
 import { applyFrontmatterEdit } from '../notes/frontmatter.js';
-import type { Note } from '../types.js';
+import type { Note, NoteListItem, SearchResult } from '../types.js';
 
-export async function vaultContextHandler(notesDir: string) {
+/**
+ * The runtime counterpart to `VaultConfig`: a configured vault with its live
+ * `NoteStore` (own chokidar watcher) and `SearchIndex`. The entry point builds
+ * one per registry vault; the tool handlers route reads/writes across them by
+ * name (#89). Defined here rather than in `types.ts` to avoid a `types.ts` →
+ * `NoteStore` → `types.ts` import cycle.
+ */
+export interface VaultRuntime {
+  /** Slug-safe vault name (matches the config entry). */
+  name: string;
+  /** Absolute vault root — used to read the context file directly. */
+  notesDir: string;
+  /** Bootstrap doc filename relative to `notesDir` (defaults to `profile.md`). */
+  contextFile: string;
+  noteStore: NoteStore;
+  searchIndex: SearchIndex;
+}
+
+/** The live per-vault stores/indexes plus the default (write-narrow) vault name. */
+export interface VaultRuntimeRegistry {
+  vaults: VaultRuntime[];
+  defaultVault: string;
+}
+
+export async function vaultContextHandler(notesDir: string, contextFile = 'profile.md') {
   try {
-    const raw = await fs.readFile(path.join(notesDir, 'profile.md'), 'utf-8');
+    const raw = await fs.readFile(path.join(notesDir, contextFile), 'utf-8');
     return { contents: [{ uri: 'vault://context', text: raw, mimeType: 'text/markdown' }] };
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
-      throw new Error('profile.md not found — create it at the vault root.');
+      throw new Error(`${contextFile} not found — create it at the vault root.`);
     }
     const msg = e instanceof Error ? e.message : String(e);
-    throw new Error(`Failed to read profile.md: ${msg}`);
+    throw new Error(`Failed to read ${contextFile}: ${msg}`);
   }
 }
 
@@ -52,17 +76,120 @@ export function slugValidationError(slug: string): ToolResponse {
   return err(`Invalid slug "${slug}": must be a non-empty relative path without "..", null bytes, or leading/trailing "/"`);
 }
 
+// Narrow a vault-resolution result to the error branch. VaultRuntime and
+// VaultRuntime[] never carry `content`; a ToolResponse always does, and is
+// never an array — so this distinguishes the error branch from either a single
+// runtime or a runtime list.
+function isToolError(x: unknown): x is ToolResponse {
+  return typeof x === 'object' && x !== null && !Array.isArray(x) && 'content' in x;
+}
+
 export function createMcpServer(
-  noteStore: NoteStore,
-  searchIndex: SearchIndex,
-  config: { notesDir: string; defaultExcludeTags?: string[] },
+  registry: VaultRuntimeRegistry,
+  config: { defaultExcludeTags?: string[] } = {},
 ): McpServer {
-  const { notesDir } = config;
   const defaultExcludeTags = config.defaultExcludeTags ?? [];
+  const vaultsByName = new Map(registry.vaults.map((v) => [v.name, v]));
+  const defaultRuntime = vaultsByName.get(registry.defaultVault)!;
+  const configuredNames = registry.vaults.map((v) => `"${v.name}"`).join(', ');
+  // Default vault first, then the rest in registry order. This is the scan order
+  // get_note uses when `vault` is omitted. Because a slug found in >1 vault
+  // errors (never silently resolves), the ordering only determines the vault
+  // order in that collision message — it does not pick a winner.
+  const orderedVaults: VaultRuntime[] = [
+    defaultRuntime,
+    ...registry.vaults.filter((v) => v.name !== registry.defaultVault),
+  ];
+
   const server = new McpServer({
     name: 'library',
     version: '1.0.0',
   });
+
+  function unknownVaultError(name: string): ToolResponse {
+    return err(`Unknown vault "${name}". Configured vaults: ${configuredNames}.`);
+  }
+
+  // Read tools: omitted `vault` spans all vaults (read-wide); a named vault
+  // scopes to it (unknown → error). Returns the vault list or an error response.
+  function resolveReadVaults(vault?: string): VaultRuntime[] | ToolResponse {
+    if (vault === undefined) return registry.vaults;
+    const v = vaultsByName.get(vault);
+    if (!v) return unknownVaultError(vault);
+    return [v];
+  }
+
+  // Write tools: omitted `vault` targets the default vault (write-narrow); a
+  // named vault targets it (unknown → error). Returns the runtime or an error.
+  function resolveWriteVault(vault?: string): VaultRuntime | ToolResponse {
+    if (vault === undefined) return defaultRuntime;
+    const v = vaultsByName.get(vault);
+    if (!v) return unknownVaultError(vault);
+    return v;
+  }
+
+  // Reused `vault` param descriptions.
+  const readVaultParam = z.string().optional().describe(
+    'Optional vault name. Omit to span all configured vaults (each result is tagged with its source vault); pass a name to scope to that vault.'
+  );
+  const writeVaultParam = z.string().optional().describe(
+    'Optional vault name. Omit to target the default vault; pass a name to write to that specific vault.'
+  );
+
+  // Rebuild one vault's search index from its full note corpus. Called after
+  // every write so subsequent searches in that vault see the change without
+  // waiting for the watcher tick. Scoped to the written vault only.
+  async function rebuildIndex(v: VaultRuntime): Promise<void> {
+    const allNotes = await v.noteStore.listWithContent();
+    v.searchIndex.buildIndexWithContent(allNotes);
+  }
+
+  // The shared skeleton of the surgical body/frontmatter mutators
+  // (append_to_section, edit_note, edit_frontmatter): validate the slug, load the
+  // note from the resolved vault, run a pure `transform`, and on success stamp
+  // "updated", upsert, rebuild that vault's index, and return the full written
+  // note. `transform` carries the only per-tool differences — the transform call,
+  // its reason→message table, and which upsert fields change (body edits keep the
+  // note's tags/related; frontmatter edits keep the body and supply new
+  // tags/related/extras). The success shape's omitted `frontmatter` spreads to
+  // `{ updated }`, matching the body-edit path.
+  type SurgicalWriteResult =
+    | { ok: true; content: string; tags?: string[]; related?: string[]; frontmatter?: Record<string, unknown> }
+    | { ok: false; message: string };
+
+  async function surgicalWrite(
+    v: VaultRuntime,
+    slug: string,
+    failPrefix: string,
+    transform: (note: Note) => SurgicalWriteResult,
+  ): Promise<ToolResponse> {
+    if (!isValidSlug(slug)) return slugValidationError(slug);
+    let written;
+    try {
+      const note = await v.noteStore.get(slug);
+      if (!note) {
+        return err(`Note "${slug}" not found.`);
+      }
+      const result = transform(note);
+      if (!result.ok) {
+        return err(result.message);
+      }
+      const updated = new Date().toISOString().split('T')[0];
+      written = await v.noteStore.upsert({
+        slug,
+        title: note.frontmatter.title,
+        content: result.content,
+        tags: result.tags,
+        related: result.related,
+        frontmatter: { ...result.frontmatter, updated },
+      });
+      await rebuildIndex(v);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return err(`${failPrefix} "${slug}": ${msg}`);
+    }
+    return ok(written.raw);
+  }
 
   async function withToolError(prefix: string, fn: () => Promise<ToolResponse>): Promise<ToolResponse> {
     try {
@@ -73,58 +200,6 @@ export function createMcpServer(
     }
   }
 
-  // Rebuild the search index from the full note corpus. Called after every write
-  // so subsequent searches see the change without waiting for the watcher tick.
-  async function rebuildIndex(): Promise<void> {
-    const allNotes = await noteStore.listWithContent();
-    searchIndex.buildIndexWithContent(allNotes);
-  }
-
-  // The shared skeleton of the surgical body/frontmatter mutators
-  // (append_to_section, edit_note, edit_frontmatter): validate the slug, load the
-  // note, run a pure `transform`, and on success stamp "updated", upsert, rebuild
-  // the index, and return the full written note. `transform` carries the only
-  // per-tool differences — the transform call, its reason→message table, and which
-  // upsert fields change (body edits keep the note's tags/related; frontmatter
-  // edits keep the body and supply new tags/related/extras). The success shape's
-  // omitted `frontmatter` spreads to `{ updated }`, matching the body-edit path.
-  type SurgicalWriteResult =
-    | { ok: true; content: string; tags?: string[]; related?: string[]; frontmatter?: Record<string, unknown> }
-    | { ok: false; message: string };
-
-  async function surgicalWrite(
-    slug: string,
-    failPrefix: string,
-    transform: (note: Note) => SurgicalWriteResult,
-  ): Promise<ToolResponse> {
-    if (!isValidSlug(slug)) return slugValidationError(slug);
-    let written;
-    try {
-      const note = await noteStore.get(slug);
-      if (!note) {
-        return err(`Note "${slug}" not found.`);
-      }
-      const result = transform(note);
-      if (!result.ok) {
-        return err(result.message);
-      }
-      const updated = new Date().toISOString().split('T')[0];
-      written = await noteStore.upsert({
-        slug,
-        title: note.frontmatter.title,
-        content: result.content,
-        tags: result.tags,
-        related: result.related,
-        frontmatter: { ...result.frontmatter, updated },
-      });
-      await rebuildIndex();
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      return err(`${failPrefix} "${slug}": ${msg}`);
-    }
-    return ok(written.raw);
-  }
-
   // ── Tools ──────────────────────────────────────────────────────────────────
 
   server.tool(
@@ -133,10 +208,16 @@ export function createMcpServer(
     'Read this first to orient yourself to the vault — its structure, contents, ' +
     'and how to navigate it effectively. ' +
     'Load this silently for context; do not summarize or recite its contents unless the user explicitly asks.',
-    {},
-    async () =>
+    {
+      vault: z.string().optional().describe(
+        'Optional vault name. Omit for the default vault\'s context; pass a name to load a specific vault\'s context file.'
+      ),
+    },
+    async ({ vault }) =>
       withToolError('Failed to load vault context', async () => {
-        const result = await vaultContextHandler(notesDir);
+        const v = resolveWriteVault(vault);
+        if (isToolError(v)) return v;
+        const result = await vaultContextHandler(v.notesDir, v.contextFile);
         return ok(result.contents[0].text);
       })
   );
@@ -144,41 +225,82 @@ export function createMcpServer(
   server.tool(
     'list_notes',
     'List notes in the knowledge base, sorted by date (newest first). Optionally filter by slug prefix to scope results to a folder. '
+    + 'By default spans all configured vaults; each result carries a `vault` field naming its source vault. '
     + 'Notes tagged with the vault\'s default-excluded tags (e.g. archived, historical) are omitted by default; pass exclude_tags: [] to include them, or a custom list to override the default. '
     + 'If you haven\'t already, call get_vault_context first to orient yourself to this vault.',
     {
       path: z.string().optional().describe('Optional slug prefix to filter by (e.g. "projects/startup"). Trailing slash is normalized automatically.'),
       exclude_tags: z.array(z.string()).optional().describe('Tags to exclude from results (case-insensitive). Omit to use the vault default-exclude set; pass [] to exclude nothing; pass a list to replace the default.'),
+      vault: readVaultParam,
     },
-    async ({ path: prefix, exclude_tags }) =>
+    async ({ path: prefix, exclude_tags, vault }) =>
       withToolError('Failed to list notes', async () => {
-        const notes = await noteStore.list();
+        const vaults = resolveReadVaults(vault);
+        if (isToolError(vaults)) return vaults;
         const normalized = prefix && (prefix.endsWith('/') ? prefix : prefix + '/');
-        const filtered = normalized ? notes.filter((n) => n.slug.startsWith(normalized)) : notes;
+        const tagged: Array<NoteListItem & { vault: string }> = [];
+        for (const v of vaults) {
+          const notes = await v.noteStore.list();
+          for (const n of notes) tagged.push({ ...n, vault: v.name });
+        }
+        const filtered = normalized ? tagged.filter((n) => n.slug.startsWith(normalized)) : tagged;
         const excluded = filterByExcludedTags(filtered, exclude_tags ?? defaultExcludeTags);
+        // Concat + sort by date desc across vaults (matches single-vault order:
+        // same comparator NoteStore.list() uses, and Array.sort is stable).
+        excluded.sort((a, b) => b.frontmatter.date.localeCompare(a.frontmatter.date));
         return ok(JSON.stringify(excluded, null, 2));
       })
   );
 
   server.tool(
     'get_note',
-    'Get the full content and metadata of a specific note by its slug.',
-    { slug: z.string().describe('The note slug (e.g. "react-hooks-rules")') },
-    async ({ slug }) => {
+    'Get the full content and metadata of a specific note by its slug. ' +
+    'By default resolves the slug across all vaults (default vault first); pass `vault` to read from a specific vault. '
+    + 'If the slug exists in more than one vault, the call errors listing them so you can disambiguate with `vault`.',
+    {
+      slug: z.string().describe('The note slug (e.g. "react-hooks-rules")'),
+      vault: z.string().optional().describe(
+        'Optional vault name. Omit to resolve the slug across all vaults (default vault first); pass a name to read from that vault.'
+      ),
+    },
+    async ({ slug, vault }) => {
       if (!isValidSlug(slug)) return slugValidationError(slug);
+      if (vault !== undefined) {
+        const v = vaultsByName.get(vault);
+        if (!v) return unknownVaultError(vault);
+        return withToolError(`Failed to read note "${slug}"`, async () => {
+          const note = await v.noteStore.get(slug);
+          if (!note) {
+            return err(`Note "${slug}" not found in vault "${vault}".`);
+          }
+          return ok(note.raw);
+        });
+      }
+      // Omitted vault → resolve default-first across all vaults. Raw is returned
+      // unchanged (round-trips into update_note); a cross-vault slug collision
+      // errors so the caller passes `vault` explicitly.
       return withToolError(`Failed to read note "${slug}"`, async () => {
-        const note = await noteStore.get(slug);
-        if (!note) {
+        const hits: Array<{ vault: string; note: Note }> = [];
+        for (const v of orderedVaults) {
+          const note = await v.noteStore.get(slug);
+          if (note) hits.push({ vault: v.name, note });
+        }
+        if (hits.length === 0) {
           return err(`Note "${slug}" not found.`);
         }
-        return ok(note.raw);
+        if (hits.length > 1) {
+          const names = hits.map((h) => `"${h.vault}"`).join(', ');
+          return err(`Note "${slug}" exists in multiple vaults: ${names}. Pass vault to disambiguate.`);
+        }
+        return ok(hits[0].note.raw);
       });
     }
   );
 
   server.tool(
     'create_note',
-    'Create a new note in the knowledge base. Provide a path to place it (e.g. "projects/startup/market-analysis") or omit to land it in inbox/. Use [[slug]] syntax to link to related notes.',
+    'Create a new note in the knowledge base. Provide a path to place it (e.g. "projects/startup/market-analysis") or omit to land it in inbox/. Use [[slug]] syntax to link to related notes. '
+    + 'Writes to the default vault unless `vault` is given.',
     {
       title: z.string().describe('The note title'),
       content: z.string().describe('Markdown content for the note body'),
@@ -189,8 +311,11 @@ export function createMcpServer(
         'Additional YAML frontmatter fields to write (e.g. {status: "shaping"}). ' +
         'Cannot set tool-managed fields (title, date, tags, related) — use the typed params for those.'
       ),
+      vault: writeVaultParam,
     },
-    async ({ title, content, path: notePath, tags, related, frontmatter }) => {
+    async ({ title, content, path: notePath, tags, related, frontmatter, vault }) => {
+      const wv = resolveWriteVault(vault);
+      if (isToolError(wv)) return wv;
       const slug = notePath ?? ('inbox/' + NoteStore.makeSlug(title));
       if (!isValidSlug(slug)) return slugValidationError(slug);
 
@@ -205,12 +330,12 @@ export function createMcpServer(
 
       let note;
       try {
-        const existing = await noteStore.get(slug);
+        const existing = await wv.noteStore.get(slug);
         if (existing) {
           return err(`Note already exists at "${slug}" — use update_note to modify it.`);
         }
-        note = await noteStore.upsert({ slug, title, content, tags, related, frontmatter });
-        await rebuildIndex();
+        note = await wv.noteStore.upsert({ slug, title, content, tags, related, frontmatter });
+        await rebuildIndex(wv);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         return err(`Failed to write note "${slug}": ${msg}`);
@@ -225,7 +350,8 @@ export function createMcpServer(
     'title, tags, and related can be passed as separate params or embedded as frontmatter in content — ' +
     'useful when passing back output from get_note directly. Explicit params take precedence over frontmatter values. ' +
     'Omit tags or related (or pass an empty array) to preserve existing values; pass a non-empty array to replace them. ' +
-    'Non-tool-managed frontmatter fields (e.g. status) embedded in content are preserved on round-trip update.',
+    'Non-tool-managed frontmatter fields (e.g. status) embedded in content are preserved on round-trip update. '
+    + 'Targets the default vault unless `vault` is given — a note fetched from a non-default vault must pass that vault here.',
     {
       slug: z.string().describe('The slug of the note to update'),
       title: z.string().optional().describe('New title for the note. Can also be supplied via frontmatter in content.'),
@@ -236,12 +362,15 @@ export function createMcpServer(
         'Additional YAML frontmatter fields to write (e.g. {status: "shaping"}). ' +
         'Cannot set tool-managed fields (title, date, tags, related) — use the typed params for those.'
       ),
+      vault: writeVaultParam,
     },
-    async ({ slug, title, content, tags, related, frontmatter }) => {
+    async ({ slug, title, content, tags, related, frontmatter, vault }) => {
+      const wv = resolveWriteVault(vault);
+      if (isToolError(wv)) return wv;
       if (!isValidSlug(slug)) return slugValidationError(slug);
       let note;
       try {
-        const existing = await noteStore.get(slug);
+        const existing = await wv.noteStore.get(slug);
         if (!existing) {
           return err(`Note "${slug}" not found.`);
         }
@@ -249,7 +378,7 @@ export function createMcpServer(
         if (!resolved.ok) {
           return err(resolved.error);
         }
-        note = await noteStore.upsert({
+        note = await wv.noteStore.upsert({
           slug,
           title: resolved.title,
           content: resolved.content,
@@ -257,7 +386,7 @@ export function createMcpServer(
           related: resolved.related,
           frontmatter: resolved.frontmatter,
         });
-        await rebuildIndex();
+        await rebuildIndex(wv);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         return err(`Failed to write note "${slug}": ${msg}`);
@@ -271,7 +400,8 @@ export function createMcpServer(
     'Append content under a named "## heading" in an existing note, without regenerating the whole body. ' +
     'Cheaper and safer than update_note for the common "add a bullet / log an entry" case — no need to read and resend the full note. ' +
     'The heading is matched by exact text (level-agnostic); content is inserted at the end of that section. ' +
-    'Stamps the note\'s "updated" frontmatter field and returns the full updated note.',
+    'Stamps the note\'s "updated" frontmatter field and returns the full updated note. '
+    + 'Targets the default vault unless `vault` is given.',
     {
       slug: z.string().describe('The slug of the note to append to'),
       heading: z.string().min(1).describe('Exact text of the target "## heading" (without the leading #s)'),
@@ -280,9 +410,12 @@ export function createMcpServer(
         'If the heading is absent, create a new "## heading" section at the end of the note. ' +
         'Defaults to false — a missing heading errors with the note\'s existing headings so you can correct it.'
       ),
+      vault: writeVaultParam,
     },
-    async ({ slug, heading, content, create_if_missing }) =>
-      surgicalWrite(slug, 'Failed to append to note', (note) => {
+    async ({ slug, heading, content, create_if_missing, vault }) => {
+      const wv = resolveWriteVault(vault);
+      if (isToolError(wv)) return wv;
+      return surgicalWrite(wv, slug, 'Failed to append to note', (note) => {
         const result = appendToSection(note.content, heading, content, create_if_missing);
         if (!result.ok) {
           if (result.reason === 'missing') {
@@ -292,7 +425,8 @@ export function createMcpServer(
           return { ok: false, message: `Heading "${heading}" is ambiguous — matches ${result.count} headings in "${slug}". Use a more specific or nested heading.` };
         }
         return { ok: true, content: result.body, tags: note.frontmatter.tags, related: note.frontmatter.related };
-      })
+      });
+    }
   );
 
   server.tool(
@@ -301,7 +435,8 @@ export function createMcpServer(
     'Mirrors the Edit-tool pattern — surgical exact-match find/replace — for targeted mid-body changes; ' +
     'cheaper and safer than update_note when you only need to change a specific passage. ' +
     'old_string must match exactly (whitespace included) and be unique unless replace_all is set. ' +
-    'Stamps the note\'s "updated" frontmatter field and returns the full updated note.',
+    'Stamps the note\'s "updated" frontmatter field and returns the full updated note. '
+    + 'Targets the default vault unless `vault` is given.',
     {
       slug: z.string().describe('The slug of the note to edit'),
       old_string: z.string().min(1).describe('Exact text to find in the note body (whitespace-sensitive)'),
@@ -310,9 +445,12 @@ export function createMcpServer(
         'Replace every occurrence of old_string. ' +
         'Defaults to false — a non-unique old_string errors with the match count so you can disambiguate.'
       ),
+      vault: writeVaultParam,
     },
-    async ({ slug, old_string, new_string, replace_all }) =>
-      surgicalWrite(slug, 'Failed to edit note', (note) => {
+    async ({ slug, old_string, new_string, replace_all, vault }) => {
+      const wv = resolveWriteVault(vault);
+      if (isToolError(wv)) return wv;
+      return surgicalWrite(wv, slug, 'Failed to edit note', (note) => {
         const result = editBody(note.content, old_string, new_string, replace_all);
         if (!result.ok) {
           if (result.reason === 'not_found') {
@@ -324,7 +462,8 @@ export function createMcpServer(
           return { ok: false, message: `old_string is not unique — matches ${result.count} places in "${slug}". Provide a longer, more specific old_string or pass replace_all=true.` };
         }
         return { ok: true, content: result.body, tags: note.frontmatter.tags, related: note.frontmatter.related };
-      })
+      });
+    }
   );
 
   server.tool(
@@ -332,7 +471,8 @@ export function createMcpServer(
     'Surgically edit a note\'s frontmatter — set scalar fields (e.g. status) and add/remove tags or related — without regenerating the body. ' +
     'Cheaper and safer than update_note for frontmatter-only maintenance (status transitions, retagging, related cleanup): the body is read from disk and passed through byte-for-byte, never re-emitted. ' +
     'set writes scalar passthrough fields (cannot set title/date/tags/related — use add_/remove_ or update_note); add_/remove_tags and add_/remove_related mutate those lists with set semantics (re-adding an existing entry or removing an absent one is a no-op). ' +
-    'Stamps the note\'s "updated" frontmatter field and returns the full updated note.',
+    'Stamps the note\'s "updated" frontmatter field and returns the full updated note. '
+    + 'Targets the default vault unless `vault` is given.',
     {
       slug: z.string().describe('The slug of the note to edit'),
       set: z.record(z.string(), z.unknown()).optional().describe(
@@ -342,8 +482,11 @@ export function createMcpServer(
       remove_tags: z.preprocess(coerceStringArray, z.array(z.string()).optional()).describe('Tags to remove (removing an absent tag is a no-op)'),
       add_related: z.preprocess(coerceStringArray, z.array(z.string()).optional()).describe('Related slugs to add (union; re-adding an existing one is a no-op)'),
       remove_related: z.preprocess(coerceStringArray, z.array(z.string()).optional()).describe('Related slugs to remove (removing an absent one is a no-op)'),
+      vault: writeVaultParam,
     },
-    async ({ slug, set, add_tags, remove_tags, add_related, remove_related }) => {
+    async ({ slug, set, add_tags, remove_tags, add_related, remove_related, vault }) => {
+      const wv = resolveWriteVault(vault);
+      if (isToolError(wv)) return wv;
       if (!isValidSlug(slug)) return slugValidationError(slug);
 
       // Denylist check on `set` (first-fail, named key) — mirrors create_note,
@@ -368,7 +511,7 @@ export function createMcpServer(
         ? Object.fromEntries(Object.entries(set).filter(([k]) => k !== 'updated'))
         : undefined;
 
-      return surgicalWrite(slug, 'Failed to edit frontmatter of note', (note) => {
+      return surgicalWrite(wv, slug, 'Failed to edit frontmatter of note', (note) => {
         const result = applyFrontmatterEdit(
           {
             tags: note.frontmatter.tags,
@@ -399,12 +542,17 @@ export function createMcpServer(
 
   server.tool(
     'delete_note',
-    'Delete a note from the knowledge base by its slug.',
-    { slug: z.string().describe('The slug of the note to delete') },
-    async ({ slug }) => {
+    'Delete a note from the knowledge base by its slug. Targets the default vault unless `vault` is given.',
+    {
+      slug: z.string().describe('The slug of the note to delete'),
+      vault: writeVaultParam,
+    },
+    async ({ slug, vault }) => {
+      const wv = resolveWriteVault(vault);
+      if (isToolError(wv)) return wv;
       if (!isValidSlug(slug)) return slugValidationError(slug);
       const result = await withToolError(`Failed to delete note "${slug}"`, async () => {
-        const deleted = await noteStore.delete(slug);
+        const deleted = await wv.noteStore.delete(slug);
         if (!deleted) {
           return err(`Note "${slug}" not found.`);
         }
@@ -415,7 +563,7 @@ export function createMcpServer(
       // itself succeeded, and the index will catch up on the next watcher tick.
       if (!result.isError) {
         try {
-          await rebuildIndex();
+          await rebuildIndex(wv);
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
           console.error(`[library] Failed to rebuild search index after deleting "${slug}":`, msg);
@@ -428,19 +576,33 @@ export function createMcpServer(
   server.tool(
     'search_notes',
     'Search the knowledge base using keyword search. Returns matching notes scored by relevance, with excerpts. '
+    + 'By default spans all configured vaults, merging results by score; each result carries a `vault` field naming its source vault. '
     + 'Notes tagged with the vault\'s default-excluded tags (e.g. archived, historical) are omitted by default; pass exclude_tags: [] to include them, or a custom list to override the default.',
     {
       query: z.string().describe('Search query — keywords to search for'),
       limit: z.number().int().min(1).max(100).optional().describe('Maximum number of results to return (default: 10, max: 100)'),
       exclude_tags: z.array(z.string()).optional().describe('Tags to exclude from results (case-insensitive). Omit to use the vault default-exclude set; pass [] to exclude nothing; pass a list to replace the default.'),
+      vault: readVaultParam,
     },
-    async ({ query, limit, exclude_tags }) =>
+    async ({ query, limit, exclude_tags, vault }) =>
       withToolError('Search failed', async () => {
-        const results = searchIndex.search(query, limit ?? 10, exclude_tags ?? defaultExcludeTags);
-        if (results.length === 0) {
+        const vaults = resolveReadVaults(vault);
+        if (isToolError(vaults)) return vaults;
+        const cap = limit ?? 10;
+        // Query each vault's index, tag with provenance, then merge by raw score.
+        // Cross-corpus raw-score merge is imperfect — accepted at this scale;
+        // #90 documents the limitation and refines the index architecture.
+        const merged: Array<SearchResult & { vault: string }> = [];
+        for (const v of vaults) {
+          const results = v.searchIndex.search(query, cap, exclude_tags ?? defaultExcludeTags);
+          for (const r of results) merged.push({ ...r, vault: v.name });
+        }
+        merged.sort((a, b) => b.score - a.score);
+        const limited = merged.slice(0, cap);
+        if (limited.length === 0) {
           return ok(`No notes found matching "${query}".`);
         }
-        return ok(JSON.stringify(results, null, 2));
+        return ok(JSON.stringify(limited, null, 2));
       })
   );
 
@@ -449,17 +611,27 @@ export function createMcpServer(
     'List notes that contain incomplete `- [ ]` markdown checkboxes, with each todo\'s text excerpted. ' +
     'Filter by slug prefix to scope to a folder. ' +
     'Useful for finding open work across the vault. Note: checkbox syntax inside fenced code blocks is ignored. '
+    + 'By default spans all configured vaults; each result carries a `vault` field naming its source vault. '
     + 'Notes tagged with the vault\'s default-excluded tags (e.g. archived, historical) are omitted by default; pass exclude_tags: [] to include them, or a custom list to override the default.',
     {
       path: z.string().optional().describe('Optional slug prefix to filter by (e.g. "projects/startup"). Trailing slash is normalized automatically.'),
       limit: z.number().int().min(1).max(100).optional().describe('Maximum number of notes to return (default: 10, max: 100)'),
       exclude_tags: z.array(z.string()).optional().describe('Tags to exclude from results (case-insensitive). Omit to use the vault default-exclude set; pass [] to exclude nothing; pass a list to replace the default.'),
+      vault: readVaultParam,
     },
-    async ({ path: prefix, limit, exclude_tags }) =>
+    async ({ path: prefix, limit, exclude_tags, vault }) =>
       withToolError('Failed to list todos', async () => {
-        const notes = await noteStore.listWithContent();
+        const vaults = resolveReadVaults(vault);
+        if (isToolError(vaults)) return vaults;
         const normalized = prefix && (prefix.endsWith('/') ? prefix : prefix + '/');
-        const scoped = normalized ? notes.filter((n) => n.slug.startsWith(normalized)) : notes;
+        const gathered: Array<NoteListItem & { content: string; vault: string }> = [];
+        for (const v of vaults) {
+          const notes = await v.noteStore.listWithContent();
+          for (const n of notes) gathered.push({ ...n, vault: v.name });
+        }
+        // Concat + sort by date desc across vaults (same comparator as list()).
+        gathered.sort((a, b) => b.frontmatter.date.localeCompare(a.frontmatter.date));
+        const scoped = normalized ? gathered.filter((n) => n.slug.startsWith(normalized)) : gathered;
         // Exclude before the map below drops frontmatter (and before the limit slice).
         const visible = filterByExcludedTags(scoped, exclude_tags ?? defaultExcludeTags);
 
@@ -468,6 +640,7 @@ export function createMcpServer(
             slug: n.slug,
             title: n.frontmatter.title,
             todos: extractTodos(n.content),
+            vault: n.vault,
           }))
           .filter((n) => n.todos.length > 0)
           .slice(0, limit ?? 10);
@@ -483,12 +656,16 @@ export function createMcpServer(
     'move_note',
     'Move a note to a new location in the vault. Preserves all metadata (title, date, tags, related) ' +
     'and automatically updates related fields in other notes that reference the old slug. ' +
-    'Fails if a note already exists at the target slug — delete it first if you intend to replace.',
+    'Fails if a note already exists at the target slug — delete it first if you intend to replace. '
+    + 'Operates within a single vault (the default unless `vault` is given); cross-vault moves are not supported here — use the promote skill.',
     {
       slug: z.string().describe('The current slug of the note to move'),
       new_slug: z.string().describe('The target slug to move the note to'),
+      vault: writeVaultParam,
     },
-    async ({ slug, new_slug }) => {
+    async ({ slug, new_slug, vault }) => {
+      const wv = resolveWriteVault(vault);
+      if (isToolError(wv)) return wv;
       if (!isValidSlug(slug)) return slugValidationError(slug);
       if (!isValidSlug(new_slug)) return slugValidationError(new_slug);
       if (slug === new_slug) {
@@ -496,8 +673,8 @@ export function createMcpServer(
       }
 
       try {
-        const { updatedRefs } = await noteStore.move(slug, new_slug);
-        await rebuildIndex();
+        const { updatedRefs } = await wv.noteStore.move(slug, new_slug);
+        await rebuildIndex(wv);
 
         let msg = `Moved note from "${slug}" to "${new_slug}".`;
         if (updatedRefs.length > 0) {
@@ -518,8 +695,11 @@ export function createMcpServer(
   );
 
   // ── Resources ──────────────────────────────────────────────────────────────
+  //
+  // MCP resources have no param surface, so they stay bound to the default vault
+  // in #89. Multi-vault resource enumeration is deferred (not in this slice).
 
-  // List all notes as resources
+  // List all notes as resources (default vault)
   server.resource(
     'notes-index',
     'notes://index',
@@ -527,7 +707,7 @@ export function createMcpServer(
     async () => {
       let notes;
       try {
-        notes = await noteStore.list();
+        notes = await defaultRuntime.noteStore.list();
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         throw new Error(`Failed to list notes: ${msg}`);
@@ -551,15 +731,15 @@ export function createMcpServer(
     'vault-context',
     'vault://context',
     { description: 'Vault bootstrap document (profile.md). Read this first to orient yourself to the vault — its structure, contents, and how to navigate it.' },
-    () => vaultContextHandler(notesDir)
+    () => vaultContextHandler(defaultRuntime.notesDir, defaultRuntime.contextFile)
   );
 
-  // Individual note resources via template
+  // Individual note resources via template (default vault)
   const noteTemplate = new ResourceTemplate('note://{slug}', {
     list: async () => {
       let notes;
       try {
-        notes = await noteStore.list();
+        notes = await defaultRuntime.noteStore.list();
       } catch (e) {
         console.error('[library] Failed to list note resources:', e instanceof Error ? e.message : e);
         return { resources: [] };
@@ -586,7 +766,7 @@ export function createMcpServer(
       }
       let note;
       try {
-        note = await noteStore.get(decodedSlug);
+        note = await defaultRuntime.noteStore.get(decodedSlug);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         throw new Error(`Failed to read note "${decodedSlug}": ${msg}`);
