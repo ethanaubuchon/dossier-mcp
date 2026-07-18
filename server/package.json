@@ -13,6 +13,7 @@
     "@modelcontextprotocol/sdk": "^1.12.0",
     "chokidar": "^4.0.0",
     "gray-matter": "^4.0.3",
+    "js-yaml": "^5.2.1",
     "slugify": "^1.6.6",
     "zod": "^4.4.3"
   },
