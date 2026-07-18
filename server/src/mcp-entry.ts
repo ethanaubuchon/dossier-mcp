@@ -30,17 +30,24 @@ import { fileURLToPath } from 'url';
 import { NoteStore } from './notes/NoteStore.js';
 import { SearchIndex } from './search/SearchIndex.js';
 import { createMcpServer } from './mcp/server.js';
-import { loadConfig } from './config/config.js';
+import { loadVaultConfig } from './config/loadVaultConfig.js';
 import { resolveDefaultExcludeTags } from './config/excludeTags.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 async function main() {
-  const config = await loadConfig();
-  const notesDir = process.env.NOTES_DIR || config.notesDir || path.join(__dirname, '../../notes');
+  // Resolve the vault registry (DOSSIER_CONFIG → XDG config.yaml → NOTES_DIR fallback).
+  // v1: only the default vault is wired into the single-vault runtime; #89/#90
+  // consume the rest of the registry. A VaultConfigError here propagates out of
+  // main() to the fail-fast .catch below.
+  const registry = loadVaultConfig({
+    env: process.env,
+    defaultNotesDir: path.join(__dirname, '../../notes'),
+  });
+  const notesDir = registry.vaults.find((v) => v.name === registry.defaultVault)!.path;
   // Env overrides config (mirrors NOTES_DIR). Unset env → config default;
   // explicit empty string → [] (per-vault opt-out).
-  const defaultExcludeTags = resolveDefaultExcludeTags(process.env.DOSSIER_EXCLUDE_TAGS, config.defaultExcludeTags);
+  const defaultExcludeTags = resolveDefaultExcludeTags(process.env.DOSSIER_EXCLUDE_TAGS, registry.defaultExcludeTags);
 
   const noteStore = new NoteStore(notesDir);
   const searchIndex = new SearchIndex();
