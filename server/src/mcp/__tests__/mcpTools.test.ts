@@ -23,7 +23,7 @@ async function makeTmpDir(): Promise<string> {
  * Build a single-vault MCP server for the existing tests: wraps the one
  * NoteStore/SearchIndex in a one-vault runtime registry named `default`. The
  * "all = one" invariant — single-vault behavior must be identical to the
- * pre-#89 single-store server — is what these migrated tests guard.
+ * a plain single-store server — is what these tests guard.
  */
 function singleVaultServer(
   noteStore: NoteStore,
@@ -636,7 +636,7 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
     });
   });
 
-  describe('search_notes limit validation (issue #53)', () => {
+  describe('search_notes limit validation', () => {
     type ToolEntry = {
       inputSchema: z.ZodType;
       handler: (args: unknown, extra: unknown) => Promise<unknown>;
@@ -845,9 +845,9 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
       // longer beats frontmatter tags. This is a deliberate trade-off: the
       // ambiguity of `tags: []` (does it mean "clear" or "didn't change"?) is
       // resolved by trusting whatever the body's frontmatter explicitly states.
-      // Prior to the fix, explicit `[]` would have wiped both existing tags and
-      // the frontmatter tags. PR #30's "explicit params take precedence" still
-      // holds for non-empty explicit values.
+      // An explicit `[]` does not wipe both existing tags and the frontmatter
+      // tags; "explicit params take precedence" still holds for non-empty
+      // explicit values.
       await noteStore.upsert({ slug: 'precedence-note', title: 'Precedence', content: 'Old body.', tags: ['existing'] });
 
       const tags = tagsSchema.parse([]); // explicit empty → coerced to undefined
@@ -868,7 +868,7 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
   });
 });
 
-describe('withToolError helper (issue #50)', () => {
+describe('withToolError helper', () => {
   // Helper is not exported; verify behavior end-to-end via a tool that uses it.
   // We test the observable contract: errors thrown inside a wrapped handler
   // surface as { isError: true, content: [{ type: 'text', text: "<prefix>: <message>" }] }
@@ -1654,7 +1654,7 @@ describe('edit_frontmatter — MCP handler integration', () => {
   });
 });
 
-describe('exclude_tags — MCP handler integration (issue #84)', () => {
+describe('exclude_tags — MCP handler integration', () => {
   let dir: string;
   let noteStore: NoteStore;
   let searchIndex: SearchIndex;
@@ -1790,7 +1790,7 @@ describe('exclude_tags — MCP handler integration (issue #84)', () => {
   });
 });
 
-describe('vault param — schema surface (#89)', () => {
+describe('vault param — schema surface', () => {
   let dir: string;
   let noteStore: NoteStore;
   let searchIndex: SearchIndex;

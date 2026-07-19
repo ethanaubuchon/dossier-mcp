@@ -15,7 +15,7 @@ import type { Note, NoteListItem, SearchResult } from '../types.js';
  * The runtime counterpart to `VaultConfig`: a configured vault with its live
  * `NoteStore` (own chokidar watcher) and `SearchIndex`. The entry point builds
  * one per registry vault; the tool handlers route reads/writes across them by
- * name (#89). Defined here rather than in `types.ts` to avoid a `types.ts` →
+ * name. Defined here rather than in `types.ts` to avoid a `types.ts` →
  * `NoteStore` → `types.ts` import cycle.
  */
 export interface VaultRuntime {
@@ -505,8 +505,8 @@ export function createMcpServer(
 
       // `updated` is stamped automatically on every write; drop any caller value
       // so it can't manufacture a spurious "successful" write that just re-stamps
-      // today. (It's off FRONTMATTER_DENYLIST — which #65 keeps for update_note's
-      // content round-trip — so this tool strips it explicitly instead.)
+      // today. (It's off FRONTMATTER_DENYLIST — which update_note's content
+      // round-trip relies on — so this tool strips it explicitly instead.)
       const setFields = set
         ? Object.fromEntries(Object.entries(set).filter(([k]) => k !== 'updated'))
         : undefined;
@@ -589,9 +589,18 @@ export function createMcpServer(
         const vaults = resolveReadVaults(vault);
         if (isToolError(vaults)) return vaults;
         const cap = limit ?? 10;
-        // Query each vault's index, tag with provenance, then merge by raw score.
-        // Cross-corpus raw-score merge is imperfect — accepted at this scale;
-        // #90 documents the limitation and refines the index architecture.
+        // Query each vault's index (asking each for up to `cap`), tag results
+        // with provenance, then merge by raw BM25 score and take the global top
+        // `cap`.
+        //
+        // Limitation: each vault's scores are computed against
+        // *its own* corpus statistics — IDF, avgDocLen, docFreq are per-index —
+        // so raw scores are NOT normalized across vaults and are only loosely
+        // comparable. A term that is rare (high IDF) in a small vault can outrank
+        // the same term in a large vault where it is common. This is accepted at
+        // the single-user / few-vaults scale; no cross-corpus score normalization
+        // ships in v1. Asking each index for `cap` (not a per-vault fraction)
+        // keeps the merge exact for the top `cap` — no vault is under-sampled.
         const merged: Array<SearchResult & { vault: string }> = [];
         for (const v of vaults) {
           const results = v.searchIndex.search(query, cap, exclude_tags ?? defaultExcludeTags);
@@ -696,8 +705,8 @@ export function createMcpServer(
 
   // ── Resources ──────────────────────────────────────────────────────────────
   //
-  // MCP resources have no param surface, so they stay bound to the default vault
-  // in #89. Multi-vault resource enumeration is deferred (not in this slice).
+  // MCP resources have no param surface, so they stay bound to the default
+  // vault. Multi-vault resource enumeration is not supported through resources.
 
   // List all notes as resources (default vault)
   server.resource(
