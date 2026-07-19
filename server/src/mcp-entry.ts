@@ -37,9 +37,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 async function main() {
   // Resolve the vault registry (DOSSIER_CONFIG → XDG config.yaml → NOTES_DIR fallback).
-  // #89: every configured vault is wired into a live runtime (own store, index,
-  // and watcher). A VaultConfigError here propagates out of main() to the
-  // fail-fast .catch below.
+  // Every configured vault is wired into a live runtime (own store, index, and
+  // watcher). A VaultConfigError here propagates out of main() to the fail-fast
+  // .catch below.
   const registry = loadVaultConfig({
     env: process.env,
     defaultNotesDir: path.join(__dirname, '../../notes'),
@@ -49,14 +49,9 @@ async function main() {
   const defaultExcludeTags = resolveDefaultExcludeTags(process.env.DOSSIER_EXCLUDE_TAGS, registry.defaultExcludeTags);
 
   // Build one runtime per configured vault: a NoteStore (with its own chokidar
-  // watcher) + a SearchIndex. Each vault's watcher rebuilds only that vault's
-  // index (scoped rebuild).
-  //
-  // Per-iteration `const` bindings (vault/noteStore/searchIndex) mean each
-  // change/watcherError closure captures its own store — no loop-alias bug.
-  // This wiring (AC #4: one watcher per vault) is exercised by the stdio
-  // end-to-end path, not jest — the routing tests skip initialize() to avoid
-  // per-test chokidar poll-timer leaks (see multiVault.test.ts makeRuntime).
+  // watcher) + a SearchIndex. Per-iteration `const` bindings
+  // (vault/noteStore/searchIndex) mean each change/watcherError closure captures
+  // its own store, so a watcher only ever rebuilds its own vault's index.
   const runtimes: VaultRuntime[] = [];
   for (const vault of registry.vaults) {
     const noteStore = new NoteStore(vault.path);

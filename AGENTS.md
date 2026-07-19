@@ -20,10 +20,16 @@ This repo uses **pnpm** (pinned via `packageManager` / Corepack). All commands r
 
 > `pnpm dev` and `pnpm start` reference a legacy HTTP entry (`src/index.ts`) that no longer exists — use the MCP scripts above.
 
+## Code Conventions
+
+- **Comments explain how the code works, not its history.** Describe current behavior, invariants, and non-obvious rationale. Do **not** cite issue or PR numbers (`#89`), acceptance-criterion tags (`AC #4`), or "delivered by / deferred to" phrasing in comments, docstrings, or test labels — that archaeology goes stale the moment it merges. Historic context belongs in commit messages and PR descriptions, not in the source.
+
 ## Key Gotchas
 
 _Agents: if you discover a project-specific trap, workaround, or non-obvious convention
 during your work, add it here before completing the session._
+
+- **Multi-vault `search_notes` scores are not normalized across vaults.** With more than one configured vault, each vault has its own `SearchIndex`; the tool queries each and merges results by raw BM25 score. Because IDF / avgDocLen / docFreq are computed *per index*, raw scores are only loosely comparable across vaults — a term that is rare in a small vault can outrank the same term in a large one. Accepted at the single-user / few-vaults scale; there is no cross-corpus normalization in v1. Don't treat cross-vault score ordering as globally calibrated ranking.
 
 ## Feature Development Workflow
 

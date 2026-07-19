@@ -1,5 +1,5 @@
 /**
- * Multi-vault routing tests (#89): the read-wide / write-narrow tool surface,
+ * Multi-vault routing tests: the read-wide / write-narrow tool surface,
  * per-result provenance, get_note default-first resolution + collision, per-vault
  * get_vault_context, unknown-vault errors, and scoped index rebuilds.
  *
@@ -25,7 +25,7 @@ type AnyTool = { inputSchema: any; handler: (args: unknown, extra: unknown) => P
   content: { type: string; text: string }[];
 }> };
 
-describe('multi-vault tool routing (#89)', () => {
+describe('multi-vault tool routing', () => {
   let personalDir: string;
   let workDir: string;
   let personal: VaultRuntime;
@@ -126,6 +126,81 @@ describe('multi-vault tool routing (#89)', () => {
       const bySlug = Object.fromEntries(parsed.map((n) => [n.slug, n.vault]));
       expect(bySlug['p-todo']).toBe('personal');
       expect(bySlug['w-todo']).toBe('work');
+    });
+  });
+
+  // ── Cross-vault search merge contract ──────────────────────────────────────
+
+  describe('cross-vault search merge', () => {
+    test('merged results order by raw score across vaults, not by vault iteration order', async () => {
+      // `personal` is the default vault, so it is iterated first — a concat-only
+      // merge would place its hit first. Give `work` (iterated second) the much
+      // higher term frequency (title-weighted + three body occurrences → tf 6)
+      // and `personal` a weak one (single body occurrence → tf 1), so a correct
+      // score-sorted merge reorders work ahead of personal.
+      await personal.noteStore.upsert({ slug: 'p-weak', title: 'Personal Note', content: 'quokka appears once here' });
+      await work.noteStore.upsert({ slug: 'w-strong', title: 'Quokka Field Report', content: 'quokka quokka quokka' });
+      await reindex(personal);
+      await reindex(work);
+
+      const res = await getTool('search_notes').handler({ query: 'quokka' }, {});
+      const parsed = JSON.parse(res.content[0].text) as Array<{ slug: string; vault: string; score: number }>;
+
+      expect(parsed.map((n) => n.slug)).toEqual(['w-strong', 'p-weak']);
+      expect(parsed.map((n) => n.vault)).toEqual(['work', 'personal']);
+      expect(parsed[0].score).toBeGreaterThan(parsed[1].score);
+    });
+
+    test('the global limit is applied after the cross-vault merge', async () => {
+      await personal.noteStore.upsert({ slug: 'p-a', title: 'Alpha topicword', content: 'topicword topicword' });
+      await personal.noteStore.upsert({ slug: 'p-b', title: 'Beta', content: 'topicword' });
+      await work.noteStore.upsert({ slug: 'w-a', title: 'Gamma topicword', content: 'topicword topicword topicword' });
+      await reindex(personal);
+      await reindex(work);
+
+      const res = await getTool('search_notes').handler({ query: 'topicword', limit: 2 }, {});
+      const parsed = JSON.parse(res.content[0].text) as Array<{ slug: string }>;
+      // 3 matches across 2 vaults, capped to the global top 2 by score.
+      // Assert the *specific* survivors (w-a highest, then p-a) and that the
+      // weakest match (p-b) is dropped — so a per-vault-fractional-sampling bug
+      // that also returned length 2 (e.g. ['p-a','w-a']) can't pass vacuously.
+      expect(parsed.map((n) => n.slug)).toEqual(['w-a', 'p-a']);
+      expect(parsed.map((n) => n.slug)).not.toContain('p-b');
+    });
+
+    test('per-vault index independence: a write/rebuild in one vault does not perturb another vault\'s scores', async () => {
+      await personal.noteStore.upsert({ slug: 'p-sig', title: 'Signal P', content: 'signal here' });
+      await work.noteStore.upsert({ slug: 'w-sig', title: 'Signal W', content: 'signal here' });
+      await reindex(personal);
+      await reindex(work);
+
+      const before = JSON.parse(
+        (await getTool('search_notes').handler({ query: 'signal', vault: 'work' }, {})).content[0].text,
+      ) as Array<{ slug: string; score: number }>;
+      const workScoreBefore = before.find((r) => r.slug === 'w-sig')!.score;
+
+      // Add signal-heavy notes to the DEFAULT (personal) vault via the handler,
+      // which rebuilds only personal's index. With a shared index this would
+      // shift work's IDF/docFreq (and thus its score); with per-vault indexes it
+      // must not.
+      for (let i = 0; i < 5; i++) {
+        await getTool('create_note').handler(
+          { path: `p-noise-${i}`, title: `Signal noise ${i}`, content: 'signal signal signal signal' },
+          {},
+        );
+      }
+
+      const after = JSON.parse(
+        (await getTool('search_notes').handler({ query: 'signal', vault: 'work' }, {})).content[0].text,
+      ) as Array<{ slug: string; score: number }>;
+      const workScoreAfter = after.find((r) => r.slug === 'w-sig')!.score;
+
+      expect(workScoreAfter).toBe(workScoreBefore);
+      // And personal's own search now reflects its rebuilt, larger corpus.
+      const personalHits = JSON.parse(
+        (await getTool('search_notes').handler({ query: 'signal', vault: 'personal' }, {})).content[0].text,
+      ) as Array<{ slug: string }>;
+      expect(personalHits.length).toBeGreaterThan(1);
     });
   });
 
