@@ -24,6 +24,16 @@ This repo uses **pnpm** (pinned via `packageManager` / Corepack). All commands r
 
 - **Comments explain how the code works, not its history.** Describe current behavior, invariants, and non-obvious rationale. Do **not** cite issue or PR numbers (`#89`), acceptance-criterion tags (`AC #4`), or "delivered by / deferred to" phrasing in comments, docstrings, or test labels — that archaeology goes stale the moment it merges. Historic context belongs in commit messages and PR descriptions, not in the source.
 
+## Documentation Placement
+
+Some agents working on this repo also have access to a private knowledge vault. Most contributors do not. That asymmetry decides where documentation goes:
+
+- **Anything needed to understand, build, run, or extend this repo belongs in this repo** — architecture, the tool surface, configuration, setup, gotchas, and behavioral contracts. A contributor with only repo access must be able to work without external context.
+- **Never link to a private vault, wiki, or note from this repo** — not in code comments, not in docs, not in commit messages or PR descriptions. Such a link is dead for nearly everyone who reads it. State the fact inline instead.
+- **Deliberation is not documentation.** Design exploration, scoping, alternatives considered, strategy, and prioritization rationale stay in the author's own workspace. What lands here is the *decision* and the reasoning a maintainer needs to work with the code — not the argument that produced it.
+- **Don't duplicate.** If something belongs in this repo, move it here rather than maintaining a copy in two places; parallel copies drift, and the one outside this repo is invisible to most readers.
+- **Public repo.** This repository is public. Before adding documentation sourced from private notes, strip personal, employer, or strategy context that shouldn't be published.
+
 ## Key Gotchas
 
 _Agents: if you discover a project-specific trap, workaround, or non-obvious convention
