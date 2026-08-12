@@ -2,6 +2,7 @@ import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
 import { NoteStore } from '../NoteStore.js';
+import { todayLocal } from '../dates.js';
 
 async function makeTmpDir(): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), 'library-test-'));
@@ -103,7 +104,7 @@ describe('NoteStore', () => {
       '---\ntitle: Bad Date\ndate: January 2025\n---\nBody.'
     );
 
-    const today = new Date().toISOString().split('T')[0];
+    const today = todayLocal();
     const notes = await store.list();
     const bad = notes.find((n) => n.slug === 'bad-date');
     const old = notes.find((n) => n.slug === 'old-note');
@@ -1215,5 +1216,16 @@ body
       await expect(store.get('hostile')).rejects.toThrow(/Unsupported frontmatter language/);
       expect((globalThis as Record<string, unknown>)[SENTINEL]).toBeUndefined();
     });
+  });
+
+  // Wiring guard: proves upsert stamps through todayLocal() rather than
+  // computing its own UTC date. The cross-zone correctness of todayLocal
+  // itself is covered in dates.test.ts, which pins explicit zones — this
+  // cannot, because the host zone is fixed for the life of the process.
+  test('creation date is stamped in the host local zone', async () => {
+    await store.upsert({ title: 'Dated Note', content: 'Body' });
+
+    const note = await store.get('dated-note');
+    expect(note!.frontmatter.date).toBe(todayLocal());
   });
 });
