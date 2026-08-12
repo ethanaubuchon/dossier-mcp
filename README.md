@@ -4,6 +4,8 @@ AI agents forget everything between sessions, and Claude's built-in memory is pr
 
 Built and tested with [Claude Code](https://claude.ai/code). Any MCP-compatible coding agent should work — the server uses standard stdio transport. Registration commands below are Claude Code-specific; other clients will have their own configuration method.
 
+See [SECURITY.md](SECURITY.md) for the threat model, the stdio-only and vault-confinement guarantees, and how to report a vulnerability.
+
 ## Philosophy
 
 This tool is designed for **agent-as-author** use: Claude writes and maintains notes in your vault, building up a persistent cross-session and cross-project memory that you can optionally inspect in Obsidian or any Markdown viewer.
