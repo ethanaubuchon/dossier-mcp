@@ -6,6 +6,7 @@ import { EventEmitter } from 'events';
 import type { Note, NoteListItem, NoteFrontmatter } from '../types.js';
 import { updateWikiLinks } from './wikilinks.js';
 import { parseMatter, stringifyMatter } from './parseMatter.js';
+import { todayLocal } from './dates.js';
 
 // slugify CJS/ESM compat: the callable may be the default export or the module itself
 const slugify = (slugifyLib as unknown as (text: string, options?: object) => string);
@@ -214,7 +215,7 @@ export class NoteStore extends EventEmitter {
     frontmatter?: Record<string, unknown>;
   }): Promise<Note> {
     const slug = data.slug || NoteStore.makeSlug(data.title);
-    const date = new Date().toISOString().split('T')[0];
+    const date = todayLocal();
 
     // Merge with existing note if it exists. Layer order:
     //   1. Existing non-typed extras (so keys absent from this call survive).
@@ -461,7 +462,7 @@ export class NoteStore extends EventEmitter {
       const rawDate = String(data.date ?? '');
       date = /^\d{4}-\d{2}-\d{2}$/.test(rawDate)
         ? rawDate
-        : new Date().toISOString().split('T')[0];
+        : todayLocal();
     }
     // Spread normalized non-typed fields first, then overlay validated typed
     // fields so they win on key collision. Frontmatter extras are flat by

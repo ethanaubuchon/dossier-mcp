@@ -8,6 +8,7 @@ import { coerceStringArray, resolveFrontmatterParams, FRONTMATTER_DENYLIST } fro
 import { extractTodos } from '../notes/todos.js';
 import { filterByExcludedTags } from '../notes/tagFilter.js';
 import { appendToSection, editBody } from '../notes/sections.js';
+import { todayLocal } from '../notes/dates.js';
 import { applyFrontmatterEdit } from '../notes/frontmatter.js';
 import type { Note, NoteListItem, SearchResult } from '../types.js';
 
@@ -174,7 +175,7 @@ export function createMcpServer(
       if (!result.ok) {
         return err(result.message);
       }
-      const updated = new Date().toISOString().split('T')[0];
+      const updated = todayLocal();
       written = await v.noteStore.upsert({
         slug,
         title: note.frontmatter.title,

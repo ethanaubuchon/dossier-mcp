@@ -10,6 +10,7 @@ import os from 'os';
 import path from 'path';
 import { z } from 'zod';
 import { NoteStore } from '../../notes/NoteStore.js';
+import { todayLocal } from '../../notes/dates.js';
 import { SearchIndex } from '../../search/SearchIndex.js';
 import type { NoteListItem } from '../../types.js';
 import { coerceStringArray, resolveFrontmatterParams } from '../coerce.js';
@@ -1227,7 +1228,7 @@ describe('append_to_section — MCP handler integration', () => {
 
   test('appends under a heading, stamps updated, preserves date + frontmatter, returns full note', async () => {
     await seedDoc();
-    const today = new Date().toISOString().split('T')[0];
+    const today = todayLocal();
     const tool = getTool('append_to_section');
     const res = await tool.handler({ slug: 'doc', heading: 'Log', content: 'second' });
 
@@ -1367,7 +1368,7 @@ describe('edit_note — MCP handler integration', () => {
 
   test('replaces text, stamps updated, preserves date + frontmatter, returns full note', async () => {
     await seedDoc();
-    const today = new Date().toISOString().split('T')[0];
+    const today = todayLocal();
     const res = await getTool('edit_note').handler({ slug: 'doc', old_string: 'draft entry', new_string: 'final entry' });
 
     expect(res.isError).toBeFalsy();
@@ -1423,7 +1424,7 @@ describe('edit_note — MCP handler integration', () => {
   test('overwrites a pre-existing stale updated field', async () => {
     const raw = '---\ntitle: Doc\ndate: 2020-01-01\nupdated: 2019-06-06\ntags: []\nrelated: []\n---\ndraft entry\n';
     await fs.writeFile(path.join(dir, 'doc.md'), raw, 'utf-8');
-    const today = new Date().toISOString().split('T')[0];
+    const today = todayLocal();
     const res = await getTool('edit_note').handler({ slug: 'doc', old_string: 'draft entry', new_string: 'final' });
     expect(res.isError).toBeFalsy();
     const after = await noteStore.get('doc');
@@ -1521,7 +1522,7 @@ describe('edit_frontmatter — MCP handler integration', () => {
 
   test('set-only edit: stamps updated, preserves date + body, sets the scalar', async () => {
     await seedDoc();
-    const today = new Date().toISOString().split('T')[0];
+    const today = todayLocal();
     const before = await noteStore.get('doc');
     const res = await getTool('edit_frontmatter').handler({ slug: 'doc', set: { status: 'implemented' } });
 
@@ -1641,7 +1642,7 @@ describe('edit_frontmatter — MCP handler integration', () => {
     expect(only.content[0].text).toContain('changed nothing');
 
     // updated alongside a real change → the change applies; updated is today, not the supplied value.
-    const today = new Date().toISOString().split('T')[0];
+    const today = todayLocal();
     const res = await getTool('edit_frontmatter').handler({ slug: 'doc', set: { status: 'implemented', updated: '2020-05-05' } });
     expect(res.isError).toBeFalsy();
     const after = await noteStore.get('doc');
