@@ -14,10 +14,15 @@ Context persists across sessions and projects — architectural decisions, ongoi
 
 ## Setup
 
+Install with `--frozen-lockfile`. This is the required install path — it fails if a lockfile has drifted from its `package.json` instead of silently resolving different versions, so you get exactly the dependency tree that was committed, reviewed, and tested in CI.
+
 ```bash
-cd server
-pnpm install
+# from the repo root
+pnpm install --frozen-lockfile
+pnpm -C server install --frozen-lockfile
 ```
+
+Use a plain `pnpm install` (no flag) only when you are deliberately adding or upgrading a dependency, and commit the resulting lockfile change with it.
 
 ## MCP Configuration
 
@@ -132,5 +137,8 @@ MCP resources are read-only and can be enumerated by clients at startup, making 
 ```bash
 cd server
 pnpm test         # run tests
+pnpm typecheck    # typecheck without emitting (includes test sources)
 pnpm build        # compile TypeScript to dist/
 ```
+
+`pnpm typecheck` and `pnpm test` are the two checks CI runs on every pull request.

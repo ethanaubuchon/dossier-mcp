@@ -11,12 +11,17 @@
 
 This repo uses **pnpm** (pinned via `packageManager` / Corepack). All commands run from `server/`.
 
+**Always install with `--frozen-lockfile`** — `pnpm install --frozen-lockfile` at the root and `pnpm -C server install --frozen-lockfile` for the server. The flag fails the install when a lockfile has drifted from its `package.json` rather than quietly resolving different versions, which keeps local installs, CI, and any reviewed release on an identical dependency tree. Drop the flag only when deliberately adding or upgrading a dependency, and commit the lockfile change in the same PR.
+
 | Script | Purpose |
 |--------|---------|
 | `pnpm mcp` | Start the MCP server (stdio transport) — the primary entry point (`src/mcp-entry.ts`) |
 | `pnpm build` | Compile TypeScript to `dist/` |
+| `pnpm typecheck` | Typecheck without emitting (`tsc --noEmit`), including test sources |
 | `pnpm test` | Run the Jest test suite |
 | `pnpm start:mcp` | Run the compiled MCP server (`dist/mcp-entry.js`) |
+
+CI (`.github/workflows/ci.yml`) runs `pnpm typecheck` and `pnpm test` on every pull request, after a `--frozen-lockfile` install. Run both locally before pushing.
 
 > `pnpm dev` and `pnpm start` reference a legacy HTTP entry (`src/index.ts`) that no longer exists — use the MCP scripts above.
 
