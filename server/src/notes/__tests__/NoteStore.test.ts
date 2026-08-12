@@ -1178,4 +1178,42 @@ body
     expect(note!.frontmatter.tags).toEqual(['typed-tag']);
     expect(note!.frontmatter.status).toBe('shaping');
   });
+
+  // A note file can arrive without passing through this server at all — file
+  // sync drops it straight into the vault. It must never be able to execute
+  // code when the index reads it.
+  describe('executable frontmatter', () => {
+    const SENTINEL = '__noteStoreTestSentinel';
+    const hostileNote = [
+      '---js',
+      `module.exports = { title: (globalThis.${SENTINEL} = 'executed') }`,
+      '---',
+      '',
+      'body',
+      '',
+    ].join('\n');
+
+    afterEach(() => {
+      delete (globalThis as Record<string, unknown>)[SENTINEL];
+    });
+
+    test('a "---js" note dropped into the vault is skipped, not evaluated', async () => {
+      await fs.writeFile(path.join(dir, 'hostile.md'), hostileNote, 'utf-8');
+      // The index build logs and skips unparseable notes; silence the expected error.
+      const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+      const notes = await store.list();
+
+      expect((globalThis as Record<string, unknown>)[SENTINEL]).toBeUndefined();
+      expect(notes.map((n) => n.slug)).not.toContain('hostile');
+      errorSpy.mockRestore();
+    });
+
+    test('get() on a "---js" note throws instead of evaluating it', async () => {
+      await fs.writeFile(path.join(dir, 'hostile.md'), hostileNote, 'utf-8');
+
+      await expect(store.get('hostile')).rejects.toThrow(/Unsupported frontmatter language/);
+      expect((globalThis as Record<string, unknown>)[SENTINEL]).toBeUndefined();
+    });
+  });
 });

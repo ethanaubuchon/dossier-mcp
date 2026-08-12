@@ -1,4 +1,4 @@
-import matter from 'gray-matter';
+import { parseMatter, type ParsedMatter } from '../notes/parseMatter.js';
 
 export const FRONTMATTER_DENYLIST = new Set(['title', 'date', 'tags', 'related']);
 
@@ -46,9 +46,9 @@ export function resolveFrontmatterParams(params: {
     }
   }
 
-  let parsed: matter.GrayMatterFile<string>;
+  let parsed: ParsedMatter;
   try {
-    parsed = matter(params.content);
+    parsed = parseMatter(params.content);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return { ok: false, error: `Failed to parse note content: ${msg}` };
