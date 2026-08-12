@@ -8,6 +8,7 @@
     "mcp": "pnpm -C server mcp",
     "test": "pnpm -C server test",
     "build": "pnpm -C server build",
+    "typecheck": "pnpm -C server typecheck",
     "install:all": "pnpm -C server install"
   },
   "devDependencies": {
