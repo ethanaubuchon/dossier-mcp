@@ -395,6 +395,19 @@ describe('MCP tool logic — NoteStore + SearchIndex integration', () => {
       expect(result).toEqual({ ok: true, title: 'My Note', content: 'Body text.', tags: undefined, related: undefined, frontmatter: undefined });
     });
 
+    test('rejects "---js" content instead of evaluating it', () => {
+      // Tool params are caller-supplied, so create_note/update_note content is
+      // the most direct route to gray-matter's eval-backed javascript engine.
+      const sentinel = '__coerceTestSentinel';
+      const content = `---js\nmodule.exports = { title: (globalThis.${sentinel} = 'executed') }\n---\nBody.`;
+
+      const result = resolveFrontmatterParams({ title: undefined, content, tags: undefined, related: undefined, frontmatter: undefined });
+
+      expect((globalThis as Record<string, unknown>)[sentinel]).toBeUndefined();
+      expect(result).toEqual({ ok: false, error: expect.stringContaining('Unsupported frontmatter language') });
+      delete (globalThis as Record<string, unknown>)[sentinel];
+    });
+
     test('extracts title from frontmatter when title param is absent', () => {
       const content = '---\ntitle: Extracted Title\n---\nBody text.';
       const result = resolveFrontmatterParams({ title: undefined, content, tags: undefined, related: undefined, frontmatter: undefined });

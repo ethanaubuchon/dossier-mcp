@@ -1,11 +1,11 @@
 import fs from 'fs/promises';
 import path from 'path';
-import matter from 'gray-matter';
 import slugifyLib from 'slugify';
 import chokidar, { type FSWatcher } from 'chokidar';
 import { EventEmitter } from 'events';
 import type { Note, NoteListItem, NoteFrontmatter } from '../types.js';
 import { updateWikiLinks } from './wikilinks.js';
+import { parseMatter, stringifyMatter } from './parseMatter.js';
 
 // slugify CJS/ESM compat: the callable may be the default export or the module itself
 const slugify = (slugifyLib as unknown as (text: string, options?: object) => string);
@@ -137,7 +137,7 @@ export class NoteStore extends EventEmitter {
         const slug = rel.replace(/\.md$/, '');
         try {
           const raw = await fs.readFile(filePath, 'utf-8');
-          const parsed = matter(raw);
+          const parsed = parseMatter(raw);
           return {
             slug,
             frontmatter: this.parseFrontmatter(parsed.data),
@@ -196,7 +196,7 @@ export class NoteStore extends EventEmitter {
       if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
       throw e;
     }
-    const parsed = matter(raw);
+    const parsed = parseMatter(raw);
     return {
       slug,
       frontmatter: this.parseFrontmatter(parsed.data),
@@ -236,7 +236,7 @@ export class NoteStore extends EventEmitter {
 
     const notePath = this.notePath(slug);
     await fs.mkdir(path.dirname(notePath), { recursive: true });
-    const fileContent = matter.stringify(data.content, frontmatter as unknown as Record<string, unknown>);
+    const fileContent = stringifyMatter(data.content, frontmatter as unknown as Record<string, unknown>);
     // Atomic overwrite: tmp file in the same directory + rename. The watcher
     // stays quiet because awaitWriteFinish (not the `ignored` predicate alone)
     // requires file size stability for 500ms before firing — the tmp file's
@@ -347,7 +347,7 @@ export class NoteStore extends EventEmitter {
         ...source.frontmatter,
         related: source.frontmatter.related.map((r) => (r === oldSlug ? newSlug : r)),
       };
-      content = matter.stringify(
+      content = stringifyMatter(
         updateWikiLinks(source.content, oldSlug, newSlug).content,
         newFrontmatter as unknown as Record<string, unknown>,
       );
