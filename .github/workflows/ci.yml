@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A newer push to the same branch makes an in-flight run obsolete.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Typecheck and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # Must precede setup-node: the `cache: pnpm` option below shells out to
+      # pnpm to locate its store, so pnpm has to be on PATH first. The pnpm
+      # version is not pinned here — action-setup reads it from the
+      # `packageManager` field in package.json.
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: pnpm
+          # Both lockfiles participate: the root workspace holds dev tooling,
+          # server/ holds the actual server dependency tree.
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            server/pnpm-lock.yaml
+
+      # --frozen-lockfile fails the build if a lockfile is out of sync with its
+      # package.json rather than silently resolving new versions, so CI installs
+      # exactly what was reviewed.
+      - name: Install root dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install server dependencies
+        run: pnpm -C server install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
