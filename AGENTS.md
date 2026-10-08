@@ -7,6 +7,8 @@
 - Notes: Markdown files with YAML frontmatter, read from a vault directory via chokidar
 - Search: In-memory full-text search built on the note index
 
+Module map, invariants, and test layout: `docs/ARCHITECTURE.md`. Tool contract: `docs/TOOLS.md`. Keep both current when changing behavior they describe.
+
 ## Development Commands
 
 This repo uses **pnpm** (pinned via `packageManager` / Corepack). All commands run from `server/`.

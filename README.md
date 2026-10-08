@@ -4,7 +4,7 @@ AI agents forget everything between sessions, and Claude's built-in memory is pr
 
 Built and tested with [Claude Code](https://claude.ai/code). Any MCP-compatible coding agent should work — the server uses standard stdio transport. Registration commands below are Claude Code-specific; other clients will have their own configuration method.
 
-See [SECURITY.md](SECURITY.md) for the threat model, the stdio-only and vault-confinement guarantees, and how to report a vulnerability.
+See [SECURITY.md](SECURITY.md) for the threat model, the stdio-only and vault-confinement guarantees, and how to report a vulnerability. Contributor reference: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (modules, invariants, tests) and [docs/TOOLS.md](docs/TOOLS.md) (full tool contract).
 
 ## Philosophy
 
@@ -29,6 +29,8 @@ Use a plain `pnpm install` (no flag) only when you are deliberately adding or up
 ## MCP Configuration
 
 The following commands are for Claude Code. Other MCP clients will have their own way to register a stdio server — point them at the same binary with `NOTES_DIR` set.
+
+These examples serve a single vault via `NOTES_DIR`. To serve several vaults, use a config file instead (see [Multi-vault configuration](#multi-vault-configuration)); when a config file is present, `NOTES_DIR` is ignored and can be dropped from the registration.
 
 ### Dev mode (no build step)
 
@@ -68,12 +70,44 @@ Then re-add with the command above.
 
 | Variable | Description |
 |---|---|
-| `NOTES_DIR` | Absolute path to the vault root (e.g. `/path/to/your/vault`) |
-| `DOSSIER_EXCLUDE_TAGS` | Comma-separated tags to exclude from `search_notes`, `list_notes`, and `list_todos` results by default (case-insensitive). Overrides the built-in default (`archived,historical`). Set to an empty string to disable default exclusion for this vault. Callers can still override per request via each tool's `exclude_tags` param (`[]` includes everything; a list replaces the default). Notes remain directly reachable via `get_note` regardless. |
+| `NOTES_DIR` | Absolute path to the vault root (e.g. `/path/to/your/vault`). Used only when no config file is found; it then serves a single vault named `default`. |
+| `DOSSIER_CONFIG` | Path to a multi-vault config file. If set, the file must exist or the server refuses to start. |
+| `XDG_CONFIG_HOME` | Base directory for the default config location, `$XDG_CONFIG_HOME/dossier/config.yaml` (falls back to `~/.config`). |
+| `DOSSIER_EXCLUDE_TAGS` | Comma-separated tags to exclude from `search_notes`, `list_notes`, and `list_todos` results by default (case-insensitive). Overrides both the built-in default (`archived,historical`) and the config file's `exclude_tags`. Set to an empty string to disable default exclusion. Callers can still override per request via each tool's `exclude_tags` param (`[]` includes everything; a list replaces the default). Notes remain directly reachable via `get_note` regardless. |
+
+## Multi-vault configuration
+
+One server can serve several named vaults, each with its own index and file watcher. The config file is located in this order:
+
+1. `$DOSSIER_CONFIG`
+2. `${XDG_CONFIG_HOME:-~/.config}/dossier/config.yaml`
+3. none — fall back to a single vault named `default` at `$NOTES_DIR`
+
+```yaml
+default_vault: personal        # required when more than one vault is defined
+exclude_tags: [archived, historical]   # optional; DOSSIER_EXCLUDE_TAGS still wins
+vaults:
+  personal:
+    path: ~/vault              # must be an existing directory; leading ~ is expanded
+  work:
+    path: ~/work-notes
+    context_file: conventions.md   # optional; bootstrap doc, default profile.md
+  team:
+    path: ~/team-vault
+    sync: git-publication      # optional; marks a shared vault
+```
+
+Rules, all checked at startup (an invalid config stops the server with a named error):
+
+- Vault names are lowercase letters, digits, and hyphens, starting with a letter or digit.
+- `default_vault` must name a configured vault, and may be omitted only when exactly one vault is defined.
+- A `sync: git-publication` vault cannot be the default vault, so writes that don't name a vault never land in shared content.
+
+Every tool takes an optional `vault` param. Read tools (`list_notes`, `search_notes`, `list_todos`) span all vaults when it is omitted and tag each result with its source vault; `get_note` searches all vaults and errors if the slug exists in more than one. Write tools target the default vault unless `vault` is given. Resources always read the default vault. See [docs/TOOLS.md](docs/TOOLS.md) for details.
 
 ## profile.md
 
-`get_vault_context` reads `$NOTES_DIR/profile.md` — a free-form markdown file at the vault root that serves as the bootstrap document for the AI. Think of it as an `AGENTS.md` for your notes: when the MCP server is activated, reading this file first orients the agent to the vault — how it's organized, what it contains, and how to navigate it effectively.
+`get_vault_context` reads `profile.md` at the vault root (or the vault's `context_file`, if configured) — a free-form markdown file that serves as the bootstrap document for the AI. Think of it as an `AGENTS.md` for your notes: when the MCP server is activated, reading this file first orients the agent to the vault — how it's organized, what it contains, and how to navigate it effectively.
 
 What you put here is entirely up to you and your use case. Some possibilities:
 
@@ -109,9 +143,11 @@ If `profile.md` doesn't exist, `get_vault_context` returns a clear error message
 
 ## Tools exposed to Claude
 
+Every tool also accepts an optional `vault` param (see [Multi-vault configuration](#multi-vault-configuration)). Full parameters and behavior: [docs/TOOLS.md](docs/TOOLS.md).
+
 | Tool | Purpose |
 |---|---|
-| `get_vault_context` | Read `$NOTES_DIR/profile.md` — vault bootstrap document; read this first |
+| `get_vault_context` | Read the vault's bootstrap document (`profile.md`); read this first |
 | `list_notes` | List notes; optional `path` prefix filter (e.g. `projects/startup`) |
 | `get_note` | Fetch a note by slug |
 | `search_notes` | Full-text keyword search |
