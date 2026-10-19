@@ -4,13 +4,14 @@ How the server is put together: the runtime shape, the module map, the invariant
 
 ## Runtime shape
 
-The server is a single Node.js process launched by an MCP client and spoken to over stdio. It opens no sockets. There is no database: notes are Markdown files with YAML frontmatter on local disk, and every index is rebuilt in memory from those files.
+The server is a single Node.js process launched by an MCP client and spoken to over stdio. It listens on no sockets; its only outbound connections are HTTP requests to configured station vaults. There is no database: local notes are Markdown files with YAML frontmatter on disk, and every local index is rebuilt in memory from those files.
 
 ```
 MCP client ──stdio──▶ mcp-entry.ts
                           │  loadVaultConfig()  → VaultRegistry
                           │  one runtime per vault:
-                          │    NoteStore (files + watcher) ─ change ─▶ SearchIndex.rebuild
+                          │    local:   NoteStore (files + watcher) ─ change ─▶ SearchIndex.rebuild
+                          │    station: StationClient ──HTTP──▶ dossier-station
                           ▼
                      createMcpServer(runtimes)  → tools + resources
 ```
@@ -18,7 +19,7 @@ MCP client ──stdio──▶ mcp-entry.ts
 Startup (`server/src/mcp-entry.ts`):
 
 1. Resolve the vault registry (see [Configuration](#configuration)). Invalid config throws a `VaultConfigError` and the process exits non-zero — startup is fail-fast.
-2. For each configured vault, create a `NoteStore` (which starts its own file watcher), read every note, and build that vault's `SearchIndex`.
+2. For each configured local vault, create a `NoteStore` (which starts its own file watcher), read every note, and build that vault's `SearchIndex`. For each station vault, create a client (`createStationRuntime`); nothing is fetched at startup, so an unreachable station doesn't block boot.
 3. Subscribe each store's `change` event to a rebuild of *its own* index only.
 4. Hand all runtimes plus the default vault name to `createMcpServer`, along with the version from `server/package.json` (clients see server name `dossier-mcp` and that version at initialize), and connect a `StdioServerTransport`.
 5. On `SIGINT`/`SIGTERM`, close every watcher and exit.
@@ -52,14 +53,25 @@ The recurring pattern is **pure module + thin handler**: logic that can be expre
 
 ## Multi-vault model
 
-A *vault* is a named directory with its own `NoteStore`, `SearchIndex`, and watcher. `mcp/server.ts` keeps them in a name → runtime map and resolves the `vault` param per call:
+A *vault* is either a named directory with its own `NoteStore`, `SearchIndex`, and watcher, or a station reached over HTTP (see [Station vaults](#station-vaults)). `mcp/server.ts` keeps them in a name → runtime map and resolves the `vault` param per call:
 
 - **Read-wide:** read tools default to every vault and tag each result with its source.
 - **Write-narrow:** write tools default to the single default vault, so an unqualified write never lands in an unexpected place.
 - **No silent cross-vault guessing:** `get_note` without `vault` errors if the slug exists in more than one vault.
 - **Moves stay inside one vault.** There is no cross-vault move tool.
 - **Resources are default-vault only**, because MCP resources carry no parameters.
-- A vault marked `sync: git-publication` (a shared vault) **cannot be the default vault**; config validation rejects it. This is the structural guard against unqualified writes landing in shared content.
+- **Shared vaults** (`sync: git-publication` vaults and stations) **cannot be the default vault while a personal vault is configured**; config validation rejects it. This is the structural guard against unqualified writes landing in shared content. A config without any personal vault has nothing to guard, so a station-only config is valid.
+
+### Station vaults
+
+A station vault (`type: station`) is a dossier-station instance. Its runtime (`StationVaultRuntime`) holds only a `dossier-station-api` client; `VaultRuntime` is the union of it and `LocalVaultRuntime`, discriminated by `type`. In `mcp/server.ts`, `readNote`, `writeNote`, `readContext`, and `listAll` branch on that type, so the tool handlers share one code path for both backends.
+
+- **Writes merge identically.** `composeFrontmatter` (in `NoteStore.ts`) is the single frontmatter merge for both `NoteStore.upsert` and station writes. A station note's existing extras keep their lists and objects; the local read path has already flattened local ones. Because `write` replaces the stored frontmatter wholesale, `writeNote` then drops the typed fields that were only filled in on read (`withoutFilledFields`, keyed off the frontmatter the station returned).
+- **No optimistic concurrency.** Station edits read, transform, then `write`; the contract has no revision precondition, so concurrent edits to one note are last-write-wins.
+- **Station failures degrade read-wide calls, never local ones.** `readEach` runs a read across vaults; with `vault` omitted, a station error becomes a notice (an extra text item after the main result) and the other vaults still answer. Local errors, and station errors on a call that named the station, fail the call as before.
+- **Timeouts are unreachability.** `createStationRuntime` wraps `fetch` with `AbortSignal.timeout(timeoutMs)`; the client reports the abort as `unreachable`.
+- **No index or watcher.** The station searches on its side; local writes rebuild their own index, station writes rebuild nothing.
+- **Unsupported operations are refused, not emulated:** `delete_note` and `move_note` (no station verb), `list_todos` (would need every note body), and note writes to `issues/…` slugs (the contract routes issues through its issue operations, not `write`).
 
 Search scores are per-vault BM25 and are merged by raw score without normalization; see the `search_notes` entry in [TOOLS.md](TOOLS.md#search_notes).
 
@@ -71,7 +83,7 @@ Resolution happens once, at startup (`config/loadVaultConfig.ts` → `config/vau
 2. Otherwise, `${XDG_CONFIG_HOME:-~/.config}/dossier/config.yaml` if it exists.
 3. Otherwise, the fallback: a single vault named `default` at `NOTES_DIR` (or, if unset, the repo's bundled `notes/` directory).
 
-When a config file is found, `NOTES_DIR` is ignored. The config schema and validation rules are documented in the [README](../README.md#multi-vault-configuration). Validation failures carry a machine-readable code (`config_not_found`, `parse_error`, `malformed`, `no_vaults`, `default_required`, `default_unknown`, `default_is_shared`, `bad_vault_name`, `path_missing`).
+When a config file is found, `NOTES_DIR` is ignored. The config schema and validation rules are documented in the [README](../README.md#multi-vault-configuration). Validation failures carry a machine-readable code (`config_not_found`, `parse_error`, `malformed`, `no_vaults`, `default_required`, `default_unknown`, `default_is_shared`, `bad_vault_name`, `path_missing`, `api_key_missing`). A station's API key is read from the env var its `api_key_env` names, through an injected `getEnv`, and stored on the resolved `StationVaultConfig`.
 
 The default exclude-tag set is resolved as: `DOSSIER_EXCLUDE_TAGS` if set (an empty string means "exclude nothing"), else the config file's `exclude_tags`, else `archived, historical`. A tool call's `exclude_tags` param overrides whichever applies.
 
@@ -140,6 +152,7 @@ Runtime (`server/package.json`):
 | `chokidar` | Per-vault file watching. |
 | `gray-matter` | Frontmatter parse/stringify, accessed only via `parseMatter.ts`. |
 | `js-yaml` | Parsing the multi-vault config file. |
+| `dossier-station-api` | The workspace package: typed client for station vaults. |
 | `slugify` | Default slugs from titles (`inbox/<slug>`). |
 | `zod` | Tool input schemas. |
 
@@ -151,7 +164,7 @@ Dev: `typescript`, `tsx` (run TypeScript directly), `jest` + `ts-jest`, and type
 
 ## Station API package
 
-`packages/station-api/` (`dossier-station-api`) is the wire contract between dossier-station, a self-hosted shared vault and issue tracker, and its clients. It lives in this public repo because the station repo is private and a public package can't depend on a private one. The server does not use it yet. Usage and versioning are in the [package README](../packages/station-api/README.md).
+`packages/station-api/` (`dossier-station-api`) is the wire contract between dossier-station, a self-hosted shared vault and issue tracker, and its clients. It lives in this public repo because the station repo is private and a public package can't depend on a private one. The server depends on it through `workspace:*` for station vaults. Under Jest, the server maps the package to its TypeScript source (`server/jest.config.cjs`), since Jest can't load the ESM `dist/`; `tsc` and the runtime use the built `dist/`, which the package's `prepare` script builds on install. Usage and versioning are in the [package README](../packages/station-api/README.md).
 
 | Module | Role |
 |---|---|
@@ -182,7 +195,8 @@ Run `pnpm test` (Jest via ts-jest, ESM) and `pnpm typecheck` from the repo root 
 |---|---|
 | `mcp/__tests__/mcpTools.test.ts` | Tool handlers end to end against a temp vault: schema validation and coercion, slug validation, error shapes, `withToolError`, frontmatter round-trip and denylist, each write tool's success and structured-error paths (and that failed edits leave the note untouched), index rebuild after writes, `exclude_tags` behavior, resources, and the `vault` param surface. |
 | `mcp/__tests__/multiVault.test.ts` | Vault routing: read-wide results with provenance, cross-vault search merge, `get_note` resolution and collision errors, write-narrow defaults, per-vault context files, unknown-vault errors. |
-| `config/__tests__/vaultConfig.test.ts` | Config resolution chain, `NOTES_DIR` fallback, tilde expansion, every named validation error, env-over-config exclude tags. |
+| `mcp/__tests__/station.test.ts` | Station vaults against `stubStation.ts`, an in-process HTTP stub that routes by the package's endpoint table and parses every request and response through its schemas: read-wide merging and provenance, raw round-trip, degraded reads (server gone, timeout, rejected key), writes through `write` (create conflict, extras preserved), `note_history`, and the refused tools. |
+| `config/__tests__/vaultConfig.test.ts` | Config resolution chain, `NOTES_DIR` fallback, tilde expansion, station entries, the shared-default guard, every named validation error, env-over-config exclude tags. |
 | `config/__tests__/excludeTags.test.ts` | `DOSSIER_EXCLUDE_TAGS` parsing (unset vs. empty vs. list) and precedence. |
 | `notes/__tests__/NoteStore.test.ts` | CRUD, slug confinement, date handling, symlink walk and loop protection, conflict-file filtering, directory pruning, atomic writes, move atomicity and rollback, reference and wiki-link rewriting, watcher behavior, rejection of executable frontmatter in vault files. |
 | `notes/__tests__/parseMatter.test.ts` | Non-YAML fences rejected (asserting a sentinel global was never set, proving nothing was evaluated); YAML variants and fence-less notes accepted; `!!js/function` refused. |

@@ -5,8 +5,8 @@
 - pnpm workspace: `server/` and `packages/*`, one root lockfile
 - Server: `server/` — Node.js, TypeScript (ESM), Jest
 - MCP: `server/src/mcp/` — Model Context Protocol server (stdio transport) exposing note tools and resources
-- Station API: `packages/station-api/` (`dossier-station-api`) — zod schemas, generated OpenAPI document and typed client for the dossier-station HTTP API; consumed by the private station repo as a git dependency
-- Notes: Markdown files with YAML frontmatter, read from a vault directory via chokidar
+- Station API: `packages/station-api/` (`dossier-station-api`) — zod schemas, generated OpenAPI document and typed client for the dossier-station HTTP API; consumed by the private station repo as a git dependency, and by the server (`workspace:*`) for station vaults
+- Notes: Markdown files with YAML frontmatter, read from a vault directory via chokidar, or from a dossier-station instance over HTTP (`type: station` vaults)
 - Search: In-memory full-text search built on the note index
 
 Module map, invariants, and test layout: `docs/ARCHITECTURE.md`. Tool contract: `docs/TOOLS.md`. Keep both current when changing behavior they describe.
@@ -54,6 +54,7 @@ during your work, add it here before completing the session._
 
 - **`packages/station-api/openapi.json` is generated — never edit it by hand.** After changing any schema or the endpoint table, run `pnpm -C packages/station-api gen:openapi` and commit the result; a test fails when the committed file differs from what the schemas produce.
 - **Station API cross-field rules don't reach the OpenAPI document.** zod refinements (e.g. `resolution` only on canceled issues) are not representable in JSON Schema, so they are stated in schema descriptions instead. Validate with the zod schemas, not the OpenAPI document, when correctness matters.
+- **The server imports `dossier-station-api` from its built `dist/`, except under Jest.** `tsc` and the runtime resolve the package to `packages/station-api/dist`, which its `prepare` script builds during `pnpm install`; after changing the package's source, run `pnpm -C packages/station-api build` before typechecking the server. Jest maps the package to its TypeScript source instead (`server/jest.config.cjs`), because it can't load the ESM `dist/`, so server tests always see current source.
 - **Multi-vault `search_notes` scores are not normalized across vaults.** With more than one configured vault, each vault has its own `SearchIndex`; the tool queries each and merges results by raw BM25 score. Because IDF / avgDocLen / docFreq are computed *per index*, raw scores are only loosely comparable across vaults — a term that is rare in a small vault can outrank the same term in a large one. Accepted at the single-user / few-vaults scale; there is no cross-corpus normalization in v1. Don't treat cross-vault score ordering as globally calibrated ranking.
 
 ## Feature Development Workflow

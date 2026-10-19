@@ -10,13 +10,18 @@
 
 import { load } from 'js-yaml';
 import { DEFAULT_EXCLUDE_TAGS } from './excludeTags.js';
-import type { VaultConfig, VaultRegistry } from '../types.js';
+import type { StationVaultConfig, VaultConfig, VaultRegistry } from '../types.js';
 
 /** Synthetic name for the single vault synthesized from `NOTES_DIR` (no config file). */
 export const FALLBACK_VAULT_NAME = 'default';
 
 /** Slug-safe lowercase: leading alphanumeric, then alphanumerics/hyphens. */
 const VAULT_NAME_RE = /^[a-z0-9][a-z0-9-]*$/;
+
+/** Portable env var name. */
+const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+export const DEFAULT_STATION_TIMEOUT_MS = 5000;
 
 /** Guidance for an empty / comment-only config file (a common user mistake). */
 const EMPTY_CONFIG_MSG =
@@ -32,7 +37,8 @@ export type VaultConfigErrorCode =
   | 'default_unknown'
   | 'default_is_shared'
   | 'bad_vault_name'
-  | 'path_missing';
+  | 'path_missing'
+  | 'api_key_missing';
 
 /** Startup config error — carries a machine-readable `code` alongside the message. */
 export class VaultConfigError extends Error {
@@ -62,6 +68,8 @@ interface BuildInput {
   homeDir: string;
   /** Injected existence check (fs in production, a stub in tests). */
   pathExists: (p: string) => boolean;
+  /** Env lookup for station API keys (process.env in production). */
+  getEnv: (name: string) => string | undefined;
 }
 
 /**
@@ -74,12 +82,12 @@ interface BuildInput {
  *   resolve the default vault, and validate (throwing {@link VaultConfigError}).
  */
 export function buildVaultRegistry(input: BuildInput): VaultRegistry {
-  const { rawConfig, notesDirEnv, defaultNotesDir, homeDir, pathExists } = input;
+  const { rawConfig, notesDirEnv, defaultNotesDir, homeDir, pathExists, getEnv } = input;
 
   if (rawConfig === undefined) {
     const path = notesDirEnv && notesDirEnv.length > 0 ? notesDirEnv : defaultNotesDir;
     return {
-      vaults: [{ name: FALLBACK_VAULT_NAME, path, contextFile: 'profile.md' }],
+      vaults: [{ type: 'local', name: FALLBACK_VAULT_NAME, path, contextFile: 'profile.md' }],
       defaultVault: FALLBACK_VAULT_NAME,
       defaultExcludeTags: [...DEFAULT_EXCLUDE_TAGS],
     };
@@ -115,7 +123,7 @@ export function buildVaultRegistry(input: BuildInput): VaultRegistry {
   }
 
   const vaults: VaultConfig[] = Object.entries(vaultsRaw as Record<string, unknown>).map(
-    ([name, def]) => parseVault(name, def, homeDir),
+    ([name, def]) => parseVault(name, def, homeDir, getEnv),
   );
 
   if (vaults.length === 0) {
@@ -143,12 +151,15 @@ export function buildVaultRegistry(input: BuildInput): VaultRegistry {
     }
   }
 
-  // Structural leak guard: the default (write-narrow target) must not be a shared vault.
+  // Structural leak guard: while a personal vault exists, writes that don't name
+  // a vault must land there, never in shared content. A config made only of
+  // shared vaults has no personal vault to protect, so any of them may be the default.
   const defaultDef = vaults.find((v) => v.name === defaultVault)!;
-  if (defaultDef.sync === 'git-publication') {
+  if (isShared(defaultDef) && vaults.some((v) => !isShared(v))) {
+    const kind = defaultDef.type === 'station' ? 'a station vault' : '`sync: git-publication`';
     throw new VaultConfigError(
       'default_is_shared',
-      `Default vault \`${defaultVault}\` cannot be \`sync: git-publication\` — shared vaults cannot be the default write target.`,
+      `Default vault \`${defaultVault}\` cannot be ${kind} while a personal vault is configured — shared vaults cannot be the default write target.`,
     );
   }
 
@@ -156,7 +167,7 @@ export function buildVaultRegistry(input: BuildInput): VaultRegistry {
   // production (see loadVaultConfig), so a path pointing at a file fails here
   // rather than later inside NoteStore.
   for (const v of vaults) {
-    if (!pathExists(v.path)) {
+    if (v.type === 'local' && !pathExists(v.path)) {
       throw new VaultConfigError('path_missing', `Vault \`${v.name}\` path is not an existing directory: ${v.path}`);
     }
   }
@@ -170,18 +181,39 @@ export function buildVaultRegistry(input: BuildInput): VaultRegistry {
   return { vaults, defaultVault, defaultExcludeTags };
 }
 
+/** Shared vaults are git-publication vaults and stations; the rest are personal. */
+function isShared(v: VaultConfig): boolean {
+  return v.type === 'station' || v.sync === 'git-publication';
+}
+
+function parseContextFile(entry: Record<string, unknown>): string {
+  return typeof entry.context_file === 'string' && entry.context_file.length > 0
+    ? entry.context_file
+    : 'profile.md';
+}
+
 /** Parse + validate a single `vaults:` entry into a {@link VaultConfig}. */
-function parseVault(name: string, def: unknown, homeDir: string): VaultConfig {
+function parseVault(
+  name: string,
+  def: unknown,
+  homeDir: string,
+  getEnv: (name: string) => string | undefined,
+): VaultConfig {
   if (!VAULT_NAME_RE.test(name)) {
     throw new VaultConfigError(
       'bad_vault_name',
       `Vault name \`${name}\` is not slug-safe — use lowercase letters, digits, and hyphens (must start alphanumeric).`,
     );
   }
-  if (def === null || def === undefined || typeof def !== 'object') {
-    throw new VaultConfigError('malformed', `Vault \`${name}\` must be a mapping with a \`path:\`.`);
+  if (def === null || def === undefined || typeof def !== 'object' || Array.isArray(def)) {
+    throw new VaultConfigError('malformed', `Vault \`${name}\` must be a mapping with a \`path:\` (or \`type: station\`).`);
   }
   const entry = def as Record<string, unknown>;
+  const type = entry.type ?? 'local';
+  if (type === 'station') return parseStationVault(name, entry, getEnv);
+  if (type !== 'local') {
+    throw new VaultConfigError('malformed', `Vault \`${name}\` has unknown \`type: ${String(type)}\` (expected \`local\` or \`station\`).`);
+  }
   const rawPath = entry.path;
   if (typeof rawPath !== 'string' || rawPath.length === 0) {
     throw new VaultConfigError('malformed', `Vault \`${name}\` is missing a \`path:\`.`);
@@ -190,17 +222,65 @@ function parseVault(name: string, def: unknown, homeDir: string): VaultConfig {
   if (sync !== undefined && sync !== 'git-publication') {
     throw new VaultConfigError('malformed', `Vault \`${name}\` has unknown \`sync: ${String(sync)}\` (expected \`git-publication\`).`);
   }
-  const contextFile =
-    typeof entry.context_file === 'string' && entry.context_file.length > 0
-      ? entry.context_file
-      : 'profile.md';
-
   return {
+    type: 'local',
     name,
     path: expandTilde(rawPath, homeDir),
     ...(sync === 'git-publication' ? { sync } : {}),
-    contextFile,
+    contextFile: parseContextFile(entry),
   };
+}
+
+function parseStationVault(
+  name: string,
+  entry: Record<string, unknown>,
+  getEnv: (name: string) => string | undefined,
+): StationVaultConfig {
+  for (const key of ['path', 'sync']) {
+    if (entry[key] !== undefined) {
+      throw new VaultConfigError('malformed', `Station vault \`${name}\` cannot have \`${key}:\`.`);
+    }
+  }
+
+  const url = entry.url;
+  if (typeof url !== 'string' || !isHttpUrl(url)) {
+    throw new VaultConfigError('malformed', `Station vault \`${name}\` needs a \`url:\` starting with http:// or https://.`);
+  }
+
+  const apiKeyEnv = entry.api_key_env;
+  if (typeof apiKeyEnv !== 'string' || !ENV_NAME_RE.test(apiKeyEnv)) {
+    throw new VaultConfigError(
+      'malformed',
+      `Station vault \`${name}\` needs \`api_key_env:\` naming the env var that holds its API key.`,
+    );
+  }
+  const apiKey = getEnv(apiKeyEnv);
+  if (apiKey === undefined || apiKey.length === 0) {
+    throw new VaultConfigError(
+      'api_key_missing',
+      `Station vault \`${name}\` reads its API key from \`${apiKeyEnv}\`, which is not set.`,
+    );
+  }
+
+  const timeoutRaw = entry.timeout_ms;
+  let timeoutMs = DEFAULT_STATION_TIMEOUT_MS;
+  if (timeoutRaw !== undefined) {
+    if (typeof timeoutRaw !== 'number' || !Number.isInteger(timeoutRaw) || timeoutRaw <= 0) {
+      throw new VaultConfigError('malformed', `Station vault \`${name}\` has an invalid \`timeout_ms\` (expected a positive integer).`);
+    }
+    timeoutMs = timeoutRaw;
+  }
+
+  return { type: 'station', name, url, apiKeyEnv, apiKey, timeoutMs, contextFile: parseContextFile(entry) };
+}
+
+function isHttpUrl(s: string): boolean {
+  try {
+    const { protocol } = new URL(s);
+    return protocol === 'http:' || protocol === 'https:';
+  } catch {
+    return false;
+  }
 }
 
 /** Coerce the global `exclude_tags` YAML value into a string list. */

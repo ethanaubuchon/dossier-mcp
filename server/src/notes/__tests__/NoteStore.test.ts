@@ -1,7 +1,7 @@
 import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
-import { NoteStore } from '../NoteStore.js';
+import { NoteStore, composeFrontmatter } from '../NoteStore.js';
 import { todayLocal } from '../dates.js';
 
 async function makeTmpDir(): Promise<string> {
@@ -1227,5 +1227,37 @@ body
 
     const note = await store.get('dated-note');
     expect(note!.frontmatter.date).toBe(todayLocal());
+  });
+});
+
+describe('composeFrontmatter', () => {
+  const existing = {
+    title: 'Old',
+    date: '2026-01-02',
+    tags: ['a'],
+    related: ['r'],
+    status: 'draft',
+    owners: ['x', 'y'],
+  };
+
+  it('layers existing extras, then flattened caller extras, then typed fields', () => {
+    const fm = composeFrontmatter(existing, { title: 'New', frontmatter: { status: 'done', nested: { a: 1 } } }, '2026-10-19');
+    expect(fm).toEqual({
+      title: 'New',
+      date: '2026-01-02',
+      tags: ['a'],
+      related: ['r'],
+      status: 'done',
+      owners: ['x', 'y'],
+    });
+  });
+
+  it('stamps today and empty lists when there is no existing note', () => {
+    expect(composeFrontmatter(undefined, { title: 'T', tags: ['t'] }, '2026-10-19')).toEqual({
+      title: 'T',
+      date: '2026-10-19',
+      tags: ['t'],
+      related: [],
+    });
   });
 });

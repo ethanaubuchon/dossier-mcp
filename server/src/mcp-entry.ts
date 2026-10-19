@@ -16,7 +16,12 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { NoteStore } from './notes/NoteStore.js';
 import { SearchIndex } from './search/SearchIndex.js';
-import { createMcpServer, type VaultRuntime } from './mcp/server.js';
+import {
+  createMcpServer,
+  createStationRuntime,
+  type LocalVaultRuntime,
+  type VaultRuntime,
+} from './mcp/server.js';
 import { loadVaultConfig } from './config/loadVaultConfig.js';
 import { resolveDefaultExcludeTags } from './config/excludeTags.js';
 
@@ -42,7 +47,13 @@ async function main() {
   // (vault/noteStore/searchIndex) mean each change/watcherError closure captures
   // its own store, so a watcher only ever rebuilds its own vault's index.
   const runtimes: VaultRuntime[] = [];
+  const localRuntimes: LocalVaultRuntime[] = [];
   for (const vault of registry.vaults) {
+    if (vault.type === 'station') {
+      runtimes.push(createStationRuntime(vault));
+      continue;
+    }
+
     const noteStore = new NoteStore(vault.path);
     const searchIndex = new SearchIndex();
 
@@ -67,13 +78,16 @@ async function main() {
       console.error(`[dossier-mcp] File watcher error for vault "${vault.name}" — changes may not rebuild its index:`, err);
     });
 
-    runtimes.push({
+    const runtime: LocalVaultRuntime = {
+      type: 'local',
       name: vault.name,
       notesDir: vault.path,
       contextFile: vault.contextFile,
       noteStore,
       searchIndex,
-    });
+    };
+    runtimes.push(runtime);
+    localRuntimes.push(runtime);
   }
 
   const server = createMcpServer(
@@ -86,7 +100,7 @@ async function main() {
 
   // Graceful shutdown — close every vault's watcher.
   const closeAll = async () => {
-    await Promise.all(runtimes.map((r) => r.noteStore.close()));
+    await Promise.all(localRuntimes.map((r) => r.noteStore.close()));
   };
   process.on('SIGINT', async () => {
     await closeAll();

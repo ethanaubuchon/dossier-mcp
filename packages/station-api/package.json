@@ -4,6 +4,8 @@
   "description": "Wire contract (schemas, types, OpenAPI) and typed client for the dossier-station HTTP API",
   "license": "MIT",
   "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

@@ -96,11 +96,26 @@ vaults:
     sync: git-publication      # optional; marks a shared vault
 ```
 
+A vault can also be a [dossier-station](packages/station-api/README.md) instance, reached over its HTTP API instead of a directory:
+
+```yaml
+vaults:
+  station:
+    type: station
+    url: https://station.lan          # http(s) root of the station
+    api_key_env: DOSSIER_STATION_KEY  # env var holding the API key; the key never goes in this file
+    timeout_ms: 5000                  # optional; a slower request counts as unreachable
+    context_file: profile.md          # optional; read from the station as note `profile`
+```
+
 Rules, all checked at startup (an invalid config stops the server with a named error):
 
 - Vault names are lowercase letters, digits, and hyphens, starting with a letter or digit.
 - `default_vault` must name a configured vault, and may be omitted only when exactly one vault is defined.
-- A `sync: git-publication` vault cannot be the default vault, so writes that don't name a vault never land in shared content.
+- Shared vaults — `sync: git-publication` vaults and stations — cannot be the default vault while a personal (local, non-shared) vault is configured, so writes that don't name a vault never land in shared content. A config made only of shared vaults, such as a single station, may use any of them as the default.
+- A station needs `url` and `api_key_env`, and the named env var must be set. It takes no `path` or `sync`.
+
+A station takes part in reads like any other vault. When it can't be reached (or answers with an error) during a read that spans all vaults, the tool still returns the other vaults' results and adds a notice naming the station and the error; a read that names the station errors instead. Note writes go through the station's `write` verb, and `note_history` shows a station note's commit history. `delete_note` and `move_note` are refused on a station, as are note writes to its `issues/` notes, and `list_todos` skips stations.
 
 Every tool takes an optional `vault` param. Read tools (`list_notes`, `search_notes`, `list_todos`) span all vaults when it is omitted and tag each result with its source vault; `get_note` searches all vaults and errors if the slug exists in more than one. Write tools target the default vault unless `vault` is given. Resources always read the default vault. See [docs/TOOLS.md](docs/TOOLS.md) for details.
 
@@ -158,6 +173,7 @@ Every tool also accepts an optional `vault` param (see [Multi-vault configuratio
 | `edit_frontmatter` | Surgical frontmatter-only edit — `set` scalar fields (e.g. `status`) + add/remove `tags`/`related` — without regenerating the body |
 | `move_note` | Move/rename a note to a new slug; updates `related` references and inline `[[wiki-links]]` in other notes |
 | `delete_note` | Delete a note by slug |
+| `note_history` | Commit history of a note in a station vault |
 
 ## Resources exposed to Claude
 

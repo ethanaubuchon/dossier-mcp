@@ -42,6 +42,7 @@ export function loadVaultConfig(options: LoadOptions): VaultRegistry {
     defaultNotesDir: options.defaultNotesDir,
     homeDir,
     pathExists: isDirectory,
+    getEnv: (name) => env[name],
   });
 }
 
