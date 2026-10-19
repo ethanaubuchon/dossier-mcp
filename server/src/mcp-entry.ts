@@ -1,27 +1,13 @@
 /**
- * MCP stdio entry point — for Claude Desktop and other MCP clients.
+ * MCP stdio entry point.
  *
- * Claude Desktop config (~/.claude/claude_desktop_config.json):
- * {
- *   "mcpServers": {
- *     "library": {
- *       "command": "node",
- *       "args": ["/path/to/library/server/dist/mcp-entry.js"],
- *       "env": { "NOTES_DIR": "/path/to/library/notes" }
- *     }
- *   }
- * }
+ * Vaults come from a config file — `$DOSSIER_CONFIG` if set (it must exist),
+ * else `${XDG_CONFIG_HOME:-~/.config}/dossier/config.yaml` — falling back to a
+ * single vault at `NOTES_DIR` (or the repo's `notes/` dir if unset) when no
+ * config file exists.
  *
- * Or for dev (tsx):
- * {
- *   "mcpServers": {
- *     "library": {
- *       "command": "npx",
- *       "args": ["tsx", "/path/to/library/server/src/mcp-entry.ts"],
- *       "env": { "NOTES_DIR": "/path/to/library/notes" }
- *     }
- *   }
- * }
+ * Client registration examples: README.md, "MCP Configuration".
+ * Startup and per-vault wiring: docs/ARCHITECTURE.md.
  */
 
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';

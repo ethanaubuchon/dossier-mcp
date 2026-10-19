@@ -664,10 +664,11 @@ export function createMcpServer(
 
   server.tool(
     'move_note',
-    'Move a note to a new location in the vault. Preserves all metadata (title, date, tags, related) ' +
-    'and automatically updates related fields in other notes that reference the old slug. ' +
-    'Fails if a note already exists at the target slug — delete it first if you intend to replace. '
-    + 'Operates within a single vault (the default unless `vault` is given); cross-vault moves are not supported here — use the promote skill.',
+    'Move a note to a new slug within one vault, preserving its content and metadata (title, date, tags, related). ' +
+    'References to the old slug in other notes are rewritten — both `related` entries and inline wiki-links ' +
+    '([[old]], [[old|alias]], [[old#heading]]). ' +
+    'Fails if a note already exists at the target slug — delete it first if you intend to replace. ' +
+    'Operates on the default vault unless `vault` is given; moves never cross vaults.',
     {
       slug: z.string().describe('The current slug of the note to move'),
       new_slug: z.string().describe('The target slug to move the note to'),
