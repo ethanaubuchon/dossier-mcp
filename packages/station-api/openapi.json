@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "dossier-station API",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "description": "Agent API of dossier-station. Generated from the dossier-station-api schemas; do not edit by hand. `x-key-scope` names the API key scope each operation requires."
   },
   "security": [
@@ -1587,8 +1587,8 @@
       },
       "Slug": {
         "type": "string",
-        "pattern": "^[a-z0-9][a-z0-9._-]*(\\/[a-z0-9][a-z0-9._-]*)*$",
-        "description": "Vault-relative note slug, e.g. `projects/app-search`."
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*(\\/[A-Za-z0-9][A-Za-z0-9._-]*)*$",
+        "description": "Vault-relative note slug, e.g. `projects/app-search` or `issues/STN-142`."
       },
       "UpdateIssueRequest": {
         "type": "object",

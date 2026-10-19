@@ -4,7 +4,7 @@ import { endpoints, type EndpointDef } from './endpoints.js';
 import { stationSchemas } from './registry.js';
 
 /** Version of the wire contract; matches this package's `version`. */
-export const CONTRACT_VERSION = '0.1.0';
+export const CONTRACT_VERSION = '0.1.1';
 
 const ref = (id: string) => `#/components/schemas/${id}`;
 
