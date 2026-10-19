@@ -20,7 +20,7 @@ Startup (`server/src/mcp-entry.ts`):
 1. Resolve the vault registry (see [Configuration](#configuration)). Invalid config throws a `VaultConfigError` and the process exits non-zero — startup is fail-fast.
 2. For each configured vault, create a `NoteStore` (which starts its own file watcher), read every note, and build that vault's `SearchIndex`.
 3. Subscribe each store's `change` event to a rebuild of *its own* index only.
-4. Hand all runtimes plus the default vault name to `createMcpServer` and connect a `StdioServerTransport`.
+4. Hand all runtimes plus the default vault name to `createMcpServer`, along with the version from `server/package.json` (clients see server name `dossier-mcp` and that version at initialize), and connect a `StdioServerTransport`.
 5. On `SIGINT`/`SIGTERM`, close every watcher and exit.
 
 Logs go to stderr; stdout belongs to the MCP protocol.

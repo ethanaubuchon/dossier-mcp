@@ -11,6 +11,7 @@
  */
 
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { createRequire } from 'module';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { NoteStore } from './notes/NoteStore.js';
@@ -20,6 +21,8 @@ import { loadVaultConfig } from './config/loadVaultConfig.js';
 import { resolveDefaultExcludeTags } from './config/excludeTags.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// `../package.json` is server/package.json from both src/ and dist/.
+const { version } = createRequire(import.meta.url)('../package.json') as { version: string };
 
 async function main() {
   // Resolve the vault registry (DOSSIER_CONFIG → XDG config.yaml → NOTES_DIR fallback).
@@ -48,20 +51,20 @@ async function main() {
     searchIndex.buildIndexWithContent(allNotes);
 
     noteStore.on('change', async () => {
-      console.error(`[library] Vault "${vault.name}" change detected — rebuilding its search index...`);
+      console.error(`[dossier-mcp] Vault "${vault.name}" change detected — rebuilding its search index...`);
       try {
         const notes = await noteStore.listWithContent();
         searchIndex.buildIndexWithContent(notes);
-        console.error(`[library] Search index for "${vault.name}" rebuilt (${notes.length} notes).`);
+        console.error(`[dossier-mcp] Search index for "${vault.name}" rebuilt (${notes.length} notes).`);
       } catch (err) {
         const code = (err as NodeJS.ErrnoException).code;
         const detail = code ? ` (${code})` : '';
-        console.error(`[library] Failed to rebuild search index for "${vault.name}" after change${detail}:`, err);
+        console.error(`[dossier-mcp] Failed to rebuild search index for "${vault.name}" after change${detail}:`, err);
       }
     });
 
     noteStore.on('watcherError', (err: unknown) => {
-      console.error(`[library] File watcher error for vault "${vault.name}" — changes may not rebuild its index:`, err);
+      console.error(`[dossier-mcp] File watcher error for vault "${vault.name}" — changes may not rebuild its index:`, err);
     });
 
     runtimes.push({
@@ -75,7 +78,7 @@ async function main() {
 
   const server = createMcpServer(
     { vaults: runtimes, defaultVault: registry.defaultVault },
-    { defaultExcludeTags },
+    { version, defaultExcludeTags },
   );
   const transport = new StdioServerTransport();
 

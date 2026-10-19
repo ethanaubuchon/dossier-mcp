@@ -185,7 +185,7 @@ describe('NoteStore', () => {
     expect(notes).toHaveLength(1);
     expect(notes[0].frontmatter.title).toBe('Good Note');
     expect(stderrSpy).toHaveBeenCalledWith(
-      expect.stringContaining('[library] Skipping unreadable note'),
+      expect.stringContaining('[dossier-mcp] Skipping unreadable note'),
       expect.anything()
     );
     stderrSpy.mockRestore();
@@ -202,7 +202,7 @@ describe('NoteStore', () => {
     expect(notes).toHaveLength(1);
     expect(notes[0].frontmatter.title).toBe('Good Note');
     expect(stderrSpy).toHaveBeenCalledWith(
-      expect.stringContaining('[library] Skipping unreadable note'),
+      expect.stringContaining('[dossier-mcp] Skipping unreadable note'),
       expect.anything()
     );
     stderrSpy.mockRestore();
