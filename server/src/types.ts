@@ -26,17 +26,16 @@ export interface SearchResult {
 }
 
 /**
- * A single named vault in the multi-vault registry. Vaults are the named
- * config entities that team functionality (multi-vault + git-publication)
- * is built on. In v1 (#88) the registry is built and validated but only the
- * default vault is wired into the runtime.
+ * A single named vault in the multi-vault registry. Every configured vault
+ * gets its own runtime (NoteStore, SearchIndex, file watcher); see
+ * docs/ARCHITECTURE.md.
  */
 export interface VaultConfig {
-  /** Slug-safe lowercase name; appears in tool params in later phases. */
+  /** Slug-safe lowercase name; the value tools accept as their `vault` param. */
   name: string;
   /** Absolute path to the vault root (tilde already expanded). */
   path: string;
-  /** Sync policy. Absent = local vault. `git-publication` reserved for #92/#93. */
+  /** Sync policy. Absent = local vault. `git-publication` marks a shared vault, which cannot be the default vault. */
   sync?: 'git-publication';
   /** Bootstrap doc filename, relative to the vault root. Defaults to `profile.md`. */
   contextFile: string;
