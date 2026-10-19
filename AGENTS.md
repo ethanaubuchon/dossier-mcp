@@ -2,8 +2,10 @@
 
 ## Stack
 
+- pnpm workspace: `server/` and `packages/*`, one root lockfile
 - Server: `server/` — Node.js, TypeScript (ESM), Jest
 - MCP: `server/src/mcp/` — Model Context Protocol server (stdio transport) exposing note tools and resources
+- Station API: `packages/station-api/` (`dossier-station-api`) — zod schemas, generated OpenAPI document and typed client for the dossier-station HTTP API; consumed by the private station repo as a git dependency
 - Notes: Markdown files with YAML frontmatter, read from a vault directory via chokidar
 - Search: In-memory full-text search built on the note index
 
@@ -11,9 +13,11 @@ Module map, invariants, and test layout: `docs/ARCHITECTURE.md`. Tool contract: 
 
 ## Development Commands
 
-This repo uses **pnpm** (pinned via `packageManager` / Corepack). All commands run from `server/`.
+This repo uses **pnpm** (pinned via `packageManager` / Corepack) as a workspace: `pnpm-workspace.yaml` at the root lists `server` and `packages/*`, and a single root `pnpm-lock.yaml` covers all of them.
 
-**Always install with `--frozen-lockfile`** — `pnpm install --frozen-lockfile` at the root and `pnpm -C server install --frozen-lockfile` for the server. The flag fails the install when a lockfile has drifted from its `package.json` rather than quietly resolving different versions, which keeps local installs, CI, and any reviewed release on an identical dependency tree. Drop the flag only when deliberately adding or upgrading a dependency, and commit the lockfile change in the same PR.
+**Always install with `--frozen-lockfile`** — `pnpm install --frozen-lockfile` at the root installs every workspace package. The flag fails the install when the lockfile has drifted from a `package.json` rather than quietly resolving different versions, which keeps local installs, CI, and any reviewed release on an identical dependency tree. Drop the flag only when deliberately adding or upgrading a dependency, and commit the lockfile change in the same PR.
+
+At the root, `pnpm typecheck`, `pnpm test` and `pnpm build` run the script in every workspace package; inside a package they run for that package only. Server scripts (run from `server/`):
 
 | Script | Purpose |
 |--------|---------|
@@ -23,7 +27,9 @@ This repo uses **pnpm** (pinned via `packageManager` / Corepack). All commands r
 | `pnpm test` | Run the Jest test suite |
 | `pnpm start:mcp` | Run the compiled MCP server (`dist/mcp-entry.js`) |
 
-CI (`.github/workflows/ci.yml`) runs `pnpm typecheck` and `pnpm test` on every pull request, after a `--frozen-lockfile` install. Run both locally before pushing.
+`packages/station-api/` has the same `build` / `typecheck` / `test` scripts plus `pnpm gen:openapi`, which regenerates `openapi.json` from the schemas.
+
+CI (`.github/workflows/ci.yml`) runs the root `pnpm typecheck` and `pnpm test` on every pull request, after a `--frozen-lockfile` install. Run both locally before pushing.
 
 > `pnpm dev` and `pnpm start` reference a legacy HTTP entry (`src/index.ts`) that no longer exists — use the MCP scripts above.
 
@@ -46,6 +52,8 @@ Some agents working on this repo also have access to a private knowledge vault. 
 _Agents: if you discover a project-specific trap, workaround, or non-obvious convention
 during your work, add it here before completing the session._
 
+- **`packages/station-api/openapi.json` is generated — never edit it by hand.** After changing any schema or the endpoint table, run `pnpm -C packages/station-api gen:openapi` and commit the result; a test fails when the committed file differs from what the schemas produce.
+- **Station API cross-field rules don't reach the OpenAPI document.** zod refinements (e.g. `resolution` only on canceled issues) are not representable in JSON Schema, so they are stated in schema descriptions instead. Validate with the zod schemas, not the OpenAPI document, when correctness matters.
 - **Multi-vault `search_notes` scores are not normalized across vaults.** With more than one configured vault, each vault has its own `SearchIndex`; the tool queries each and merges results by raw BM25 score. Because IDF / avgDocLen / docFreq are computed *per index*, raw scores are only loosely comparable across vaults — a term that is rare in a small vault can outrank the same term in a large one. Accepted at the single-user / few-vaults scale; there is no cross-corpus normalization in v1. Don't treat cross-vault score ordering as globally calibrated ranking.
 
 ## Feature Development Workflow

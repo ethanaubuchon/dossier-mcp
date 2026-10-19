@@ -132,6 +132,6 @@ There is none, by design. The server trusts its stdio peer completely. Access co
 ## Supply chain
 
 - Six runtime dependencies, all widely used, none a network client.
-- Installs use `pnpm install --frozen-lockfile`, which fails on lockfile drift rather than silently resolving different versions — so a reviewed tag, CI, and a developer machine resolve an identical tree. The lockfiles are committed.
+- Installs use `pnpm install --frozen-lockfile`, which fails on lockfile drift rather than silently resolving different versions — so a reviewed tag, CI, and a developer machine resolve an identical tree. The workspace lockfile is committed.
 - The pnpm version is pinned via the `packageManager` field.
 - CI runs typecheck and the full test suite on every pull request.

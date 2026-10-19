@@ -1,0 +1,1658 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "dossier-station API",
+    "version": "0.1.0",
+    "description": "Agent API of dossier-station. Generated from the dossier-station-api schemas; do not edit by hand. `x-key-scope` names the API key scope each operation requires."
+  },
+  "security": [
+    {
+      "apiKey": []
+    }
+  ],
+  "paths": {
+    "/api/v1/notes/get": {
+      "post": {
+        "operationId": "getNote",
+        "summary": "Read one note",
+        "x-key-scope": "read",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GetNoteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetNoteResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error; the body names the error code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/notes/list": {
+      "post": {
+        "operationId": "listNotes",
+        "summary": "List notes, optionally under a slug prefix",
+        "x-key-scope": "read",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ListNotesRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListNotesResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error; the body names the error code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/notes/search": {
+      "post": {
+        "operationId": "searchNotes",
+        "summary": "Full-text search over issues and docs",
+        "x-key-scope": "read",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchNotesRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchNotesResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error; the body names the error code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/write": {
+      "post": {
+        "operationId": "write",
+        "summary": "Write a doc directly",
+        "x-key-scope": "read-write",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WriteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WriteResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error; the body names the error code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/history": {
+      "post": {
+        "operationId": "history",
+        "summary": "Commit history of one note",
+        "x-key-scope": "read",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HistoryRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoryResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error; the body names the error code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/freshen": {
+      "post": {
+        "operationId": "freshen",
+        "summary": "Bring the caller's view up to date (no-op)",
+        "x-key-scope": "read",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FreshenRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FreshenResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error; the body names the error code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/propose": {
+      "post": {
+        "operationId": "propose",
+        "summary": "Propose a gated change (reserved)",
+        "x-key-scope": "read-write",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProposeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "501": {
+            "description": "Reserved verb; always `not_implemented`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error; the body names the error code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/resolve": {
+      "post": {
+        "operationId": "resolve",
+        "summary": "Accept or reject a proposal (reserved)",
+        "x-key-scope": "read-write",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "501": {
+            "description": "Reserved verb; always `not_implemented`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error; the body names the error code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/promote": {
+      "post": {
+        "operationId": "promote",
+        "summary": "Publish a doc into the station (reserved)",
+        "x-key-scope": "read-write",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PromoteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "501": {
+            "description": "Reserved verb; always `not_implemented`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error; the body names the error code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/issues/create": {
+      "post": {
+        "operationId": "createIssue",
+        "summary": "Create an issue, with a duplicate check",
+        "x-key-scope": "read-write",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateIssueRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateIssueResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error; the body names the error code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/issues/update": {
+      "post": {
+        "operationId": "updateIssue",
+        "summary": "Change an issue's fields or status",
+        "x-key-scope": "read-write",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateIssueRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssueWriteResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error; the body names the error code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/issues/comment": {
+      "post": {
+        "operationId": "commentIssue",
+        "summary": "Comment on an issue",
+        "x-key-scope": "read-write",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommentIssueRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssueWriteResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error; the body names the error code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/issues/query": {
+      "post": {
+        "operationId": "queryIssues",
+        "summary": "Find issues by status, project, repo, label or staleness",
+        "x-key-scope": "read",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueryIssuesRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueryIssuesResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error; the body names the error code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/issues/bulk-update": {
+      "post": {
+        "operationId": "bulkUpdateIssues",
+        "summary": "Apply several issue updates",
+        "x-key-scope": "read-write",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkUpdateIssuesRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkUpdateIssuesResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error; the body names the error code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "apiKey": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Station API key."
+      }
+    },
+    "schemas": {
+      "BulkUpdateIssuesRequest": {
+        "type": "object",
+        "properties": {
+          "updates": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UpdateIssueRequest"
+            }
+          }
+        },
+        "required": [
+          "updates"
+        ]
+      },
+      "BulkUpdateIssuesResponse": {
+        "type": "object",
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BulkUpdateResult"
+            },
+            "description": "One entry per update, in request order."
+          }
+        },
+        "required": [
+          "results"
+        ],
+        "description": "Each update is applied independently; one failing does not stop the rest."
+      },
+      "BulkUpdateResult": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "ok": {
+                "type": "boolean",
+                "const": true
+              },
+              "id": {
+                "$ref": "#/components/schemas/IssueId"
+              },
+              "commit": {
+                "$ref": "#/components/schemas/CommitSha"
+              }
+            },
+            "required": [
+              "ok",
+              "id",
+              "commit"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "ok": {
+                "type": "boolean",
+                "const": false
+              },
+              "id": {
+                "$ref": "#/components/schemas/IssueId"
+              },
+              "error": {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "$ref": "#/components/schemas/ErrorCode"
+                  },
+                  "message": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "code",
+                  "message"
+                ]
+              }
+            },
+            "required": [
+              "ok",
+              "id",
+              "error"
+            ]
+          }
+        ]
+      },
+      "CommentIssueRequest": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/IssueId"
+          },
+          "author": {
+            "type": "string",
+            "minLength": 1
+          },
+          "body": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "id",
+          "author",
+          "body"
+        ],
+        "description": "Appends a comment under the issue body's `## Comments` heading, stamped with the author and time."
+      },
+      "CommitSha": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{7,64}$",
+        "description": "Git commit SHA of a station commit."
+      },
+      "CreateIssueRequest": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "body": {
+            "type": "string"
+          },
+          "created-by": {
+            "$ref": "#/components/schemas/CreatedBy"
+          },
+          "status": {
+            "description": "Defaults to `triage`; agent-filed issues always land in `triage`.",
+            "$ref": "#/components/schemas/IssueStatus"
+          },
+          "project": {
+            "$ref": "#/components/schemas/Slug"
+          },
+          "repos": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "blocked-by": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IssueId"
+            }
+          },
+          "found-during": {
+            "type": "string",
+            "minLength": 1
+          },
+          "owner": {
+            "type": "string",
+            "minLength": 1
+          },
+          "origin": {
+            "description": "Source issue, for migrations.",
+            "type": "string",
+            "minLength": 1
+          },
+          "confirm_new": {
+            "description": "Skip the duplicate check. Send after reviewing `possible-duplicates` candidates and deciding none match.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "title",
+          "created-by"
+        ]
+      },
+      "CreateIssueResponse": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "result": {
+                "type": "string",
+                "const": "created"
+              },
+              "issue": {
+                "$ref": "#/components/schemas/Issue"
+              },
+              "commit": {
+                "$ref": "#/components/schemas/CommitSha"
+              }
+            },
+            "required": [
+              "result",
+              "issue",
+              "commit"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "result": {
+                "type": "string",
+                "const": "possible-duplicates"
+              },
+              "candidates": {
+                "minItems": 1,
+                "maxItems": 5,
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/DuplicateCandidate"
+                }
+              }
+            },
+            "required": [
+              "result",
+              "candidates"
+            ]
+          }
+        ],
+        "description": "Either the created issue, or — when existing issues score above the duplicate threshold — candidates and no issue. On candidates, comment on a match or re-send with `confirm_new: true`."
+      },
+      "CreatedBy": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "agent",
+              "human",
+              "migration"
+            ]
+          },
+          "source": {
+            "description": "Agent session or tool for agents, account name for humans, source system for migrations.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "DuplicateCandidate": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/IssueId"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/IssueStatus"
+          },
+          "score": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "status",
+          "score"
+        ]
+      },
+      "ErrorCode": {
+        "type": "string",
+        "enum": [
+          "invalid_request",
+          "unauthorized",
+          "forbidden",
+          "not_found",
+          "conflict",
+          "not_implemented",
+          "internal"
+        ]
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "$ref": "#/components/schemas/ErrorCode"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "description": "Body of every non-2xx response."
+      },
+      "FreshenRequest": {
+        "type": "object",
+        "properties": {}
+      },
+      "FreshenResponse": {
+        "type": "object",
+        "properties": {
+          "current": {
+            "type": "boolean",
+            "const": true
+          }
+        },
+        "required": [
+          "current"
+        ],
+        "description": "The station is the single source of truth, so the caller's view is always current."
+      },
+      "GetNoteRequest": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "$ref": "#/components/schemas/Slug"
+          }
+        },
+        "required": [
+          "slug"
+        ]
+      },
+      "GetNoteResponse": {
+        "type": "object",
+        "properties": {
+          "note": {
+            "$ref": "#/components/schemas/Note"
+          }
+        },
+        "required": [
+          "note"
+        ]
+      },
+      "HistoryEntry": {
+        "type": "object",
+        "properties": {
+          "commit": {
+            "$ref": "#/components/schemas/CommitSha"
+          },
+          "date": {
+            "$ref": "#/components/schemas/IsoDateTime"
+          },
+          "author": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "status_change": {
+            "description": "Parsed from the commit's `Status:` trailer; `from` is null on creation.",
+            "type": "object",
+            "properties": {
+              "from": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/IssueStatus"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "to": {
+                "$ref": "#/components/schemas/IssueStatus"
+              }
+            },
+            "required": [
+              "from",
+              "to"
+            ]
+          }
+        },
+        "required": [
+          "commit",
+          "date",
+          "author",
+          "message"
+        ]
+      },
+      "HistoryRequest": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "$ref": "#/components/schemas/Slug"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "slug"
+        ]
+      },
+      "HistoryResponse": {
+        "type": "object",
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HistoryEntry"
+            },
+            "description": "Newest first."
+          }
+        },
+        "required": [
+          "entries"
+        ]
+      },
+      "IsoDate": {
+        "type": "string",
+        "format": "date",
+        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$",
+        "description": "Calendar date, `YYYY-MM-DD`."
+      },
+      "IsoDateTime": {
+        "type": "string",
+        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z||([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+        "description": "ISO 8601 date-time; seconds and offset are optional."
+      },
+      "Issue": {
+        "type": "object",
+        "properties": {
+          "frontmatter": {
+            "$ref": "#/components/schemas/IssueFrontmatter"
+          },
+          "body": {
+            "type": "string",
+            "description": "Markdown body; comments are under a `## Comments` heading."
+          }
+        },
+        "required": [
+          "frontmatter",
+          "body"
+        ]
+      },
+      "IssueFieldsUpdate": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "$ref": "#/components/schemas/IssueStatus"
+          },
+          "project": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Slug"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "repos": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Repos the issue concerns; one by convention."
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "blocked-by": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IssueId"
+            }
+          },
+          "found-during": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last-reviewed": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IsoDate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "resolution": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Resolution"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "duplicate-of": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IssueId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "prs": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "URLs of PRs that address the issue."
+          }
+        },
+        "description": "Fields to change on an issue; omitted fields are untouched and `null` clears an optional field. The result must still satisfy the IssueFrontmatter rules."
+      },
+      "IssueFrontmatter": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/IssueId"
+          },
+          "type": {
+            "type": "string",
+            "const": "issue"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "$ref": "#/components/schemas/IssueStatus"
+          },
+          "created": {
+            "$ref": "#/components/schemas/IsoDateTime"
+          },
+          "created-by": {
+            "$ref": "#/components/schemas/CreatedBy"
+          },
+          "project": {
+            "description": "Slug of the one project this issue belongs to.",
+            "$ref": "#/components/schemas/Slug"
+          },
+          "repos": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Repos the issue concerns; one by convention."
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "blocked-by": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IssueId"
+            }
+          },
+          "found-during": {
+            "description": "Issue ID or PR URL the issue came out of.",
+            "type": "string",
+            "minLength": 1
+          },
+          "owner": {
+            "type": "string",
+            "minLength": 1
+          },
+          "last-reviewed": {
+            "$ref": "#/components/schemas/IsoDate"
+          },
+          "resolution": {
+            "description": "Set only when status is `canceled`.",
+            "$ref": "#/components/schemas/Resolution"
+          },
+          "duplicate-of": {
+            "description": "Set only when resolution is `duplicate`.",
+            "$ref": "#/components/schemas/IssueId"
+          },
+          "prs": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "URLs of PRs that address the issue."
+          },
+          "origin": {
+            "description": "Source issue for migrated issues, e.g. `owner/repo#142`.",
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "title",
+          "status",
+          "created",
+          "created-by",
+          "repos",
+          "labels",
+          "blocked-by",
+          "prs"
+        ],
+        "description": "Frontmatter of `issues/<id>.md`. `resolution` requires status `canceled`; `duplicate-of` requires resolution `duplicate`."
+      },
+      "IssueId": {
+        "type": "string",
+        "pattern": "^[A-Z]{1,10}-[1-9][0-9]*$",
+        "description": "Issue ID: a 1–10 letter instance prefix and a sequence number, e.g. `STN-142`."
+      },
+      "IssueStatus": {
+        "type": "string",
+        "enum": [
+          "triage",
+          "backlog",
+          "in-progress",
+          "in-review",
+          "done",
+          "blocked",
+          "canceled"
+        ]
+      },
+      "IssueSummary": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/IssueId"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/IssueStatus"
+          },
+          "project": {
+            "$ref": "#/components/schemas/Slug"
+          },
+          "repos": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "last-reviewed": {
+            "$ref": "#/components/schemas/IsoDate"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "status",
+          "repos",
+          "labels"
+        ]
+      },
+      "IssueWriteResponse": {
+        "type": "object",
+        "properties": {
+          "issue": {
+            "$ref": "#/components/schemas/Issue"
+          },
+          "commit": {
+            "$ref": "#/components/schemas/CommitSha"
+          }
+        },
+        "required": [
+          "issue",
+          "commit"
+        ]
+      },
+      "ListNotesRequest": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "description": "Slug prefix to list under, e.g. `projects/`.",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/NoteKind"
+          },
+          "exclude_tags": {
+            "description": "Tags to exclude. Omit for the station default set; `[]` excludes nothing.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "ListNotesResponse": {
+        "type": "object",
+        "properties": {
+          "notes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NoteListItem"
+            },
+            "description": "Newest first."
+          }
+        },
+        "required": [
+          "notes"
+        ]
+      },
+      "Note": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "$ref": "#/components/schemas/Slug"
+          },
+          "frontmatter": {
+            "$ref": "#/components/schemas/NoteFrontmatter"
+          },
+          "body": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug",
+          "frontmatter",
+          "body"
+        ]
+      },
+      "NoteFrontmatter": {
+        "type": "object",
+        "propertyNames": {
+          "type": "string"
+        },
+        "additionalProperties": {}
+      },
+      "NoteKind": {
+        "type": "string",
+        "enum": [
+          "issue",
+          "doc"
+        ],
+        "description": "`issue` is a note under `issues/`; `doc` is every other note, projects included."
+      },
+      "NoteListItem": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "$ref": "#/components/schemas/Slug"
+          },
+          "frontmatter": {
+            "$ref": "#/components/schemas/NoteFrontmatter"
+          }
+        },
+        "required": [
+          "slug",
+          "frontmatter"
+        ]
+      },
+      "ProjectFrontmatter": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "project"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "parent": {
+            "description": "Slug of the parent project; projects form a tree.",
+            "$ref": "#/components/schemas/Slug"
+          },
+          "owner": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "type",
+          "title"
+        ],
+        "description": "Frontmatter of `projects/<slug>.md`."
+      },
+      "PromoteRequest": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "$ref": "#/components/schemas/Slug"
+          },
+          "body": {
+            "type": "string"
+          },
+          "frontmatter": {
+            "$ref": "#/components/schemas/NoteFrontmatter"
+          }
+        },
+        "required": [
+          "slug",
+          "body"
+        ],
+        "description": "Cross-vault publish of a doc into the station. Provisional; always answered with `not_implemented`."
+      },
+      "ProposeRequest": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "$ref": "#/components/schemas/Slug"
+          },
+          "body": {
+            "type": "string"
+          },
+          "frontmatter": {
+            "$ref": "#/components/schemas/NoteFrontmatter"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug",
+          "body"
+        ],
+        "description": "Gated change awaiting review. Provisional; always answered with `not_implemented`."
+      },
+      "QueryIssuesRequest": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "description": "Match any of these statuses.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IssueStatus"
+            }
+          },
+          "project": {
+            "$ref": "#/components/schemas/Slug"
+          },
+          "include_subprojects": {
+            "description": "With `project`, also match issues in its descendant projects. Defaults to true.",
+            "type": "boolean"
+          },
+          "repo": {
+            "type": "string",
+            "minLength": 1
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1
+          },
+          "stale": {
+            "description": "Only issues not reviewed within the station's stale threshold.",
+            "type": "boolean"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          }
+        },
+        "description": "All filters are combined with AND."
+      },
+      "QueryIssuesResponse": {
+        "type": "object",
+        "properties": {
+          "issues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IssueSummary"
+            }
+          }
+        },
+        "required": [
+          "issues"
+        ]
+      },
+      "Resolution": {
+        "type": "string",
+        "enum": [
+          "duplicate",
+          "obsolete",
+          "wont-do"
+        ],
+        "description": "Why a canceled issue was closed."
+      },
+      "ResolveRequest": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "$ref": "#/components/schemas/Slug"
+          },
+          "proposal": {
+            "type": "string",
+            "minLength": 1
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "accept",
+              "reject"
+            ]
+          }
+        },
+        "required": [
+          "slug",
+          "proposal",
+          "decision"
+        ],
+        "description": "Accept or reject a proposal. Provisional; always answered with `not_implemented`."
+      },
+      "SearchNotesRequest": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "minLength": 1
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "kind": {
+            "description": "Restrict to issues or docs; omit for both.",
+            "$ref": "#/components/schemas/NoteKind"
+          },
+          "exclude_tags": {
+            "description": "Tags to exclude. Omit for the station default set; `[]` excludes nothing.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "SearchNotesResponse": {
+        "type": "object",
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SearchResult"
+            },
+            "description": "Highest score first."
+          }
+        },
+        "required": [
+          "results"
+        ]
+      },
+      "SearchResult": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "$ref": "#/components/schemas/Slug"
+          },
+          "frontmatter": {
+            "$ref": "#/components/schemas/NoteFrontmatter"
+          },
+          "score": {
+            "type": "number",
+            "description": "Raw BM25 score; comparable only within one station."
+          },
+          "excerpt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug",
+          "frontmatter",
+          "score",
+          "excerpt"
+        ]
+      },
+      "Slug": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9._-]*(\\/[a-z0-9][a-z0-9._-]*)*$",
+        "description": "Vault-relative note slug, e.g. `projects/app-search`."
+      },
+      "UpdateIssueRequest": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/IssueId"
+          },
+          "set": {
+            "$ref": "#/components/schemas/IssueFieldsUpdate"
+          }
+        },
+        "required": [
+          "id",
+          "set"
+        ]
+      },
+      "WriteRequest": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "$ref": "#/components/schemas/Slug"
+          },
+          "body": {
+            "type": "string"
+          },
+          "frontmatter": {
+            "description": "Replaces the stored frontmatter when given.",
+            "$ref": "#/components/schemas/NoteFrontmatter"
+          },
+          "create_only": {
+            "description": "Fail with `conflict` if the note already exists.",
+            "type": "boolean"
+          },
+          "message": {
+            "description": "Commit message; the station generates one when omitted.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug",
+          "body"
+        ],
+        "description": "Direct (trunk-tier) write of one doc. Issues are written through the issue operations, not this verb."
+      },
+      "WriteResponse": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "$ref": "#/components/schemas/Slug"
+          },
+          "commit": {
+            "$ref": "#/components/schemas/CommitSha"
+          },
+          "created": {
+            "type": "boolean",
+            "description": "True when the write created the note."
+          }
+        },
+        "required": [
+          "slug",
+          "commit",
+          "created"
+        ]
+      }
+    }
+  }
+}
