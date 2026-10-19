@@ -1,4 +1,7 @@
-# pnpm 11 project settings for the standalone server project.
+packages:
+  - server
+  - packages/*
+
 # allowBuilds is the allowlist of packages permitted to run install scripts —
 # pnpm blocks all others by default (supply-chain hardening). esbuild is
 # required by tsx (dev/mcp runtime) and must build its native binary.

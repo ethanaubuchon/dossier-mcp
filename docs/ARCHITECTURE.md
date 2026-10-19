@@ -147,11 +147,36 @@ None of them is a network client; SECURITY.md relies on that.
 
 Two major versions of js-yaml are installed: the direct dependency (used for config, safe `load` by default) and an older one pulled in by gray-matter. gray-matter calls the older version's `safeLoad`, so frontmatter parsing does not use the unsafe loader.
 
-Dev: `typescript`, `tsx` (run TypeScript directly), `jest` + `ts-jest`, and type packages. The pnpm version is pinned via `packageManager`; both the root and `server/` have lockfiles, and installs use `--frozen-lockfile` (see [AGENTS.md](../AGENTS.md#development-commands)).
+Dev: `typescript`, `tsx` (run TypeScript directly), `jest` + `ts-jest`, and type packages. The pnpm version is pinned via `packageManager`; the repo is a pnpm workspace (`server`, `packages/*`) with one root lockfile, and installs use `--frozen-lockfile` (see [AGENTS.md](../AGENTS.md#development-commands)).
+
+## Station API package
+
+`packages/station-api/` (`dossier-station-api`) is the wire contract between dossier-station, a self-hosted shared vault and issue tracker, and its clients. It lives in this public repo because the station repo is private and a public package can't depend on a private one. The server does not use it yet. Usage and versioning are in the [package README](../packages/station-api/README.md).
+
+| Module | Role |
+|---|---|
+| `src/registry.ts` | `stationSchemas`, the package-local zod registry, and `named()`, which registers a schema under a component ID. |
+| `src/common.ts` | Slugs, issue IDs, dates, commit SHAs, the error envelope and its code → HTTP status map. |
+| `src/frontmatter.ts` | Issue and project frontmatter, the partial-update shape, issue and summary views. |
+| `src/notes.ts` | Note reads (get, list, search) and the verbs `write`, `history`, `freshen`, plus request shapes for the reserved `propose`, `resolve`, `promote`. |
+| `src/issues.ts` | Issue create (with the duplicate-check union), update, comment, query, bulk update. |
+| `src/endpoints.ts` | The endpoint table: path, key scope, request and response schema for every operation. |
+| `src/client.ts` | `createStationClient`, which derives one method per endpoint from the table. |
+| `src/openapi.ts` | `buildOpenApiDocument`, which derives the OpenAPI 3.1 document from the registry and the table. |
+
+Invariants:
+
+- **zod schemas are the single source.** TypeScript types are `z.infer` of them and the OpenAPI document is generated from them; `openapi.json` is committed and a test fails when it is stale.
+- **Every endpoint schema must be named.** The generator throws if a request or response schema is not in `stationSchemas`, since it emits each endpoint body as a `$ref`.
+- **The package uses its own registry, not zod's global one,** so two copies of the package in one process can't collide on IDs.
+- **Objects are generated with `io: 'input'`**, so the document doesn't declare `additionalProperties: false` and leaves room for later fields. The client parses responses with zod's default strip mode, so an older client ignores fields added by a newer station.
+- **Reserved verbs have `response: null`.** The document lists only their 501 response, and their client methods always reject.
+- **Client failures are one error type.** Every client method rejects with `StationApiError`: the station's error code (passed through even when this client version doesn't know it), or `unreachable` (no response) / `invalid_response` (body doesn't match the contract).
+- **`IsoDateTime` has no `format` in the document.** RFC 3339 `date-time` requires seconds and an offset, and stored issues use `2026-10-18T14:02`; the generator strips `format` so the pattern alone describes the shape.
 
 ## Tests
 
-Run `pnpm test` (Jest via ts-jest, ESM) and `pnpm typecheck` from `server/`; CI runs both on every pull request on Node 24 after frozen-lockfile installs. Test files sit next to the code in `__tests__/` directories, one suite per module:
+Run `pnpm test` (Jest via ts-jest, ESM) and `pnpm typecheck` from the repo root to cover every workspace package, or from `server/` or `packages/station-api/` for one; CI runs both from the root on every pull request on Node 24 after a frozen-lockfile install. Station API suites (`packages/station-api/src/__tests__/`) cover schema rules (`schemas.test.ts`), client request shape and error mapping (`client.test.ts`), and OpenAPI freshness and structure (`openapi.test.ts`). The server suites below all live under `server/src/`. Test files sit next to the code in `__tests__/` directories, one suite per module:
 
 | Suite | Covers |
 |---|---|

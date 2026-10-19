@@ -32,20 +32,14 @@ jobs:
         with:
           node-version: '24'
           cache: pnpm
-          # Both lockfiles participate: the root workspace holds dev tooling,
-          # server/ holds the actual server dependency tree.
-          cache-dependency-path: |
-            pnpm-lock.yaml
-            server/pnpm-lock.yaml
+          # One lockfile at the root covers every workspace package.
+          cache-dependency-path: pnpm-lock.yaml
 
-      # --frozen-lockfile fails the build if a lockfile is out of sync with its
+      # --frozen-lockfile fails the build if the lockfile is out of sync with a
       # package.json rather than silently resolving new versions, so CI installs
       # exactly what was reviewed.
-      - name: Install root dependencies
+      - name: Install dependencies
         run: pnpm install --frozen-lockfile
-
-      - name: Install server dependencies
-        run: pnpm -C server install --frozen-lockfile
 
       - name: Typecheck
         run: pnpm typecheck
