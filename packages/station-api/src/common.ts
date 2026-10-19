@@ -2,13 +2,14 @@ import { z } from 'zod';
 import { named } from './registry.js';
 
 /**
- * A vault-relative note slug: lowercase path segments separated by `/`, no
- * extension.
+ * A vault-relative note slug: path segments separated by `/`, no extension.
+ * Case is preserved, since issue notes are named by their uppercase ID. A
+ * segment can't start with `.`, which rules out `..` and hidden files.
  */
 export const SlugSchema = named(
   'Slug',
-  z.string().regex(/^[a-z0-9][a-z0-9._-]*(\/[a-z0-9][a-z0-9._-]*)*$/, 'invalid slug'),
-  'Vault-relative note slug, e.g. `projects/app-search`.',
+  z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]*(\/[A-Za-z0-9][A-Za-z0-9._-]*)*$/, 'invalid slug'),
+  'Vault-relative note slug, e.g. `projects/app-search` or `issues/STN-142`.',
 );
 
 /**

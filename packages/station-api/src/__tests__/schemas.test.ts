@@ -37,11 +37,14 @@ describe('IssueIdSchema', () => {
 });
 
 describe('SlugSchema', () => {
-  it.each(['projects/app-search', 'issues/STN-1'.toLowerCase(), 'a', 'docs/v1.2/notes_x'])('accepts %s', (slug) => {
-    expect(SlugSchema.safeParse(slug).success).toBe(true);
-  });
+  it.each(['projects/app-search', 'issues/STN-1', 'docs/README', 'Upper', 'a', 'docs/v1.2/notes_x'])(
+    'accepts %s',
+    (slug) => {
+      expect(SlugSchema.safeParse(slug).success).toBe(true);
+    },
+  );
 
-  it.each(['', '/abs', 'trailing/', 'a//b', '../up', 'Upper'])('rejects %j', (slug) => {
+  it.each(['', '/abs', 'trailing/', 'a//b', '../up', 'a/..', '.hidden', 'a/.hidden', 'a b'])('rejects %j', (slug) => {
     expect(SlugSchema.safeParse(slug).success).toBe(false);
   });
 });
