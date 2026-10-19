@@ -9,6 +9,8 @@ import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
 import { z } from 'zod';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { NoteStore } from '../../notes/NoteStore.js';
 import { todayLocal } from '../../notes/dates.js';
 import { SearchIndex } from '../../search/SearchIndex.js';
@@ -37,7 +39,7 @@ function singleVaultServer(
       vaults: [{ name: 'default', notesDir: dir, contextFile: opts.contextFile ?? 'profile.md', noteStore, searchIndex }],
       defaultVault: 'default',
     },
-    { defaultExcludeTags: opts.defaultExcludeTags },
+    { version: '0.0.0-test', defaultExcludeTags: opts.defaultExcludeTags },
   );
 }
 
@@ -1854,6 +1856,35 @@ describe('vault param — schema surface', () => {
       expect(inputSchema.safeParse({ ...base, vault: 'work' }).success).toBe(true);
       // A non-string vault is rejected.
       expect(inputSchema.safeParse({ ...base, vault: 123 }).success).toBe(false);
+    }
+  });
+});
+
+describe('server identity — initialize handshake', () => {
+  let dir: string;
+  let noteStore: NoteStore;
+
+  beforeEach(async () => {
+    dir = await makeTmpDir();
+    noteStore = new NoteStore(dir);
+    await noteStore.initialize();
+  });
+
+  afterEach(async () => {
+    await noteStore.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  test('reports name dossier-mcp and the configured version', async () => {
+    const server = singleVaultServer(noteStore, new SearchIndex(), dir);
+    const client = new Client({ name: 'test-client', version: '0.0.0' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    try {
+      await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+      expect(client.getServerVersion()).toMatchObject({ name: 'dossier-mcp', version: '0.0.0-test' });
+    } finally {
+      await client.close();
+      await server.close();
     }
   });
 });

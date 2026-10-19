@@ -56,7 +56,7 @@ describe('multi-vault tool routing', () => {
   function rebuild() {
     server = createMcpServer(
       { vaults: [personal, work], defaultVault: 'personal' },
-      { defaultExcludeTags: [] },
+      { version: '0.0.0-test', defaultExcludeTags: [] },
     );
   }
 
@@ -335,7 +335,7 @@ describe('multi-vault tool routing', () => {
       const customWork: VaultRuntime = { ...work, contextFile: 'conventions.md' };
       server = createMcpServer(
         { vaults: [personal, customWork], defaultVault: 'personal' },
-        { defaultExcludeTags: [] },
+        { version: '0.0.0-test', defaultExcludeTags: [] },
       );
       await fs.writeFile(path.join(workDir, 'conventions.md'), 'WORK CONVENTIONS', 'utf-8');
       const res = await getTool('get_vault_context').handler({ vault: 'work' }, {});

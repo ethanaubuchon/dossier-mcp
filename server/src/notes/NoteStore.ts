@@ -69,7 +69,7 @@ export class NoteStore extends EventEmitter {
       this.watcher.once('ready', () => {
         this.watcher!.off('error', onStartupError);
         this.watcher!.on('error', (err) => {
-          console.error('[library] Chokidar watcher error:', err);
+          console.error('[dossier-mcp] Chokidar watcher error:', err);
           this.emit('watcherError', err);
         });
         resolve();
@@ -145,7 +145,7 @@ export class NoteStore extends EventEmitter {
             content: parsed.content,
           };
         } catch (e) {
-          console.error(`[library] Skipping unreadable note "${slug}":`, e instanceof Error ? e.message : e);
+          console.error(`[dossier-mcp] Skipping unreadable note "${slug}":`, e instanceof Error ? e.message : e);
           return null;
         }
       })

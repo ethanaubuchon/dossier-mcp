@@ -87,7 +87,8 @@ function isToolError(x: unknown): x is ToolResponse {
 
 export function createMcpServer(
   registry: VaultRuntimeRegistry,
-  config: { defaultExcludeTags?: string[] } = {},
+  /** `version` is reported to clients at initialize; the entry point supplies server/package.json's. */
+  config: { version: string; defaultExcludeTags?: string[] },
 ): McpServer {
   const defaultExcludeTags = config.defaultExcludeTags ?? [];
   const vaultsByName = new Map(registry.vaults.map((v) => [v.name, v]));
@@ -103,8 +104,8 @@ export function createMcpServer(
   ];
 
   const server = new McpServer({
-    name: 'library',
-    version: '1.0.0',
+    name: 'dossier-mcp',
+    version: config.version,
   });
 
   function unknownVaultError(name: string): ToolResponse {
@@ -567,7 +568,7 @@ export function createMcpServer(
           await rebuildIndex(wv);
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
-          console.error(`[library] Failed to rebuild search index after deleting "${slug}":`, msg);
+          console.error(`[dossier-mcp] Failed to rebuild search index after deleting "${slug}":`, msg);
         }
       }
       return result;
@@ -752,7 +753,7 @@ export function createMcpServer(
       try {
         notes = await defaultRuntime.noteStore.list();
       } catch (e) {
-        console.error('[library] Failed to list note resources:', e instanceof Error ? e.message : e);
+        console.error('[dossier-mcp] Failed to list note resources:', e instanceof Error ? e.message : e);
         return { resources: [] };
       }
       return {
