@@ -1,6 +1,8 @@
+import { randomBytes } from 'crypto';
 import fs from 'fs/promises';
 import path from 'path';
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import {
   ISSUE_STATUSES,
@@ -23,6 +25,14 @@ import { filterByExcludedTags } from '../notes/tagFilter.js';
 import { appendToSection, editBody } from '../notes/sections.js';
 import { todayLocal } from '../notes/dates.js';
 import { applyFrontmatterEdit } from '../notes/frontmatter.js';
+import {
+  checkOutgoing,
+  collectStrings,
+  describeMatch,
+  holdToken,
+  type Outgoing,
+  type PersonalSource,
+} from '../privacy/writeCheck.js';
 import type { Note, NoteFrontmatter, NoteListItem, SearchResult, StationVaultConfig } from '../types.js';
 
 /**
@@ -42,6 +52,8 @@ export interface LocalVaultRuntime {
   contextFile: string;
   noteStore: NoteStore;
   searchIndex: SearchIndex;
+  /** True for a shared vault (`sync: git-publication`); otherwise the vault is personal. */
+  shared?: boolean;
 }
 
 /** A dossier-station vault: every read and write is a call to the station's API. */
@@ -210,21 +222,38 @@ interface NoteWrite {
   frontmatter?: Record<string, unknown>;
 }
 
+/** Checks one station-bound write before it is sent; resolves to the held result, or null to send. */
+type StationWriteGuard = (outgoing: Outgoing, previous?: Outgoing) => Promise<ToolResponse | null>;
+
+/** A note write's outcome: written, or held by the privacy check with the result to return. */
+type NoteWriteResult = { ok: true; note: Note } | { ok: false; held: ToolResponse };
+
+/** What a note write would send, for the privacy check. */
+function noteOutgoing(slug: string, content: string, frontmatter: Record<string, unknown>): Outgoing {
+  const related = Array.isArray(frontmatter.related) ? frontmatter.related.map(String) : [];
+  return { texts: [content, ...collectStrings(frontmatter)], links: related, path: slug };
+}
+
 /**
  * Write one note to either backend, merging with `existing` the same way.
- * A station write goes through its `write` verb; with `createOnly` the station
- * refuses (`conflict`) when the note already exists.
+ * A station write goes through its `write` verb, after `guard` has passed it;
+ * with `createOnly` the station refuses (`conflict`) when the note already exists.
  */
 async function writeNote(
   v: VaultRuntime,
   data: NoteWrite,
   existing: Note | null,
-  options: { createOnly?: boolean } = {},
-): Promise<Note> {
-  if (v.type === 'local') return v.noteStore.upsert(data);
+  options: { createOnly?: boolean; guard?: StationWriteGuard } = {},
+): Promise<NoteWriteResult> {
+  if (v.type === 'local') return { ok: true, note: await v.noteStore.upsert(data) };
   const composed = composeFrontmatter(existing?.frontmatter, data, todayLocal());
   const stored = existing ? storedFrontmatter.get(existing) : undefined;
   const frontmatter = existing && stored ? withoutFilledFields(composed, existing, stored) : composed;
+  if (options.guard) {
+    const previous = existing ? noteOutgoing(existing.slug, existing.content, stored ?? existing.frontmatter) : undefined;
+    const held = await options.guard(noteOutgoing(data.slug, data.content, frontmatter), previous);
+    if (held) return { ok: false, held };
+  }
   await v.client.write({
     slug: data.slug,
     body: data.content,
@@ -232,10 +261,8 @@ async function writeNote(
     ...(options.createOnly ? { create_only: true } : {}),
   });
   return {
-    slug: data.slug,
-    frontmatter: composed,
-    content: data.content,
-    raw: stringifyMatter(data.content, frontmatter),
+    ok: true,
+    note: { slug: data.slug, frontmatter: composed, content: data.content, raw: stringifyMatter(data.content, frontmatter) },
   };
 }
 
@@ -265,6 +292,15 @@ function issueMarkdown(issue: Issue): string {
 function defined<T extends Record<string, unknown>>(obj: T): Partial<T> {
   return Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined)) as Partial<T>;
 }
+
+/** A write tool's inputs to the privacy check: the caller's approval token and its call's cancel signal. */
+interface HoldOptions {
+  approveHold?: string;
+  signal?: AbortSignal;
+}
+
+/** How long the approval prompt for a held write waits for the user. */
+const PROMPT_TIMEOUT_MS = 10 * 60_000;
 
 /** `update_issue` param → `IssueFieldsUpdate` key. */
 const ISSUE_UPDATE_FIELDS = {
@@ -400,6 +436,7 @@ export function createMcpServer(
     v: VaultRuntime,
     slug: string,
     failPrefix: string,
+    hold: HoldOptions & { tool: string },
     transform: (note: Note) => SurgicalWriteResult,
   ): Promise<ToolResponse> {
     if (!isValidSlug(slug)) return slugValidationError(slug);
@@ -416,7 +453,7 @@ export function createMcpServer(
         return err(result.message);
       }
       const updated = todayLocal();
-      written = await writeNote(
+      const outcome = await writeNote(
         v,
         {
           slug,
@@ -427,7 +464,10 @@ export function createMcpServer(
           frontmatter: { ...result.frontmatter, updated },
         },
         note,
+        { guard: noteGuard(v, hold.tool, hold) },
       );
+      if (!outcome.ok) return outcome.held;
+      written = outcome.note;
       await rebuildIndex(v);
     } catch (e) {
       return err(`${failPrefix} "${slug}": ${errorMessage(e)}`);
@@ -507,6 +547,130 @@ export function createMcpServer(
   // client's name from initialize.
   function clientName(): string {
     return server.server.getClientVersion()?.name || 'dossier-mcp';
+  }
+
+  // ── Privacy check on station-bound writes ──────────────────────────────────
+
+  const personalVaults = registry.vaults.filter((r): r is LocalVaultRuntime => r.type === 'local' && !r.shared);
+
+  // Keys approve_hold tokens; random per process, so a token can only come from
+  // a held result this server issued.
+  const holdSecret = randomBytes(32);
+
+  const approveHoldParam = z.string().optional().describe(
+    'Token from a "Held: possible personal content" result. Pass it only after the user has approved sending that content; '
+    + 'it applies only when the rest of the call is unchanged.'
+  );
+
+  // Every personal note's raw file text (frontmatter included, unparsed, so a
+  // note with broken frontmatter still counts), plus each personal vault's
+  // context file, which is loaded into every session. Read fresh for each
+  // check; a file that exists but can't be read fails the write rather than
+  // being skipped.
+  async function personalSources(): Promise<PersonalSource[]> {
+    const sources: PersonalSource[] = [];
+    for (const v of personalVaults) {
+      const contextSlug = v.contextFile.replace(/\.md$/, '');
+      for (const n of await v.noteStore.listRaw()) {
+        if (n.slug === contextSlug) continue;
+        sources.push({ vault: v.name, slug: n.slug, text: n.raw });
+      }
+      let context: string | undefined;
+      try {
+        context = await fs.readFile(path.join(v.notesDir, v.contextFile), 'utf-8');
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+      }
+      if (context !== undefined) {
+        sources.push({ vault: v.name, slug: contextSlug, label: `${v.contextFile} (vault context)`, text: context });
+      }
+    }
+    return sources;
+  }
+
+  // True when the client can show a form prompt. A client declaring only URL
+  // elicitation can't, so it gets the token route instead.
+  // The SDK normalises a bare `elicitation: {}` capability to `{ form: {} }`.
+  function canPrompt(): boolean {
+    const elicitation = server.server.getClientCapabilities()?.elicitation;
+    return Boolean(elicitation && 'form' in elicitation);
+  }
+
+  // Ask the user whether to send a held write. 'unsupported' when the client
+  // rejects the request outright (method not found), so no prompt was shown.
+  // Anything else but an explicit accept, including a timeout or other error,
+  // is a refusal: once a prompt may have been shown, only the user's answer can
+  // release the write.
+  async function askToSend(
+    v: StationVaultRuntime,
+    lines: string[],
+    signal: AbortSignal | undefined,
+  ): Promise<{ answer: 'accept' } | { answer: 'unsupported' } | { answer: 'refuse'; why: string }> {
+    try {
+      const result = await server.server.elicitInput(
+        {
+          message: [
+            `dossier-mcp is about to send content to station vault "${v.name}" that may be personal:`,
+            ...lines,
+            'Send it anyway?',
+          ].join('\n'),
+          requestedSchema: { type: 'object', properties: {} },
+        },
+        { timeout: PROMPT_TIMEOUT_MS, ...(signal ? { signal } : {}) },
+      );
+      if (result.action === 'accept') return { answer: 'accept' };
+      return { answer: 'refuse', why: 'The user declined sending it. Rewrite the content without it.' };
+    } catch (e) {
+      if (e instanceof McpError && e.code === ErrorCode.MethodNotFound) return { answer: 'unsupported' };
+      console.error('[dossier-mcp] Could not get an answer about a held write:', errorMessage(e));
+      return {
+        answer: 'refuse',
+        why: `The user's approval couldn't be obtained (${errorMessage(e)}). Nothing was sent; rewrite the content without it.`,
+      };
+    }
+  }
+
+  // The privacy check on one station-bound write; resolves to null to send, or
+  // to the held result. It passes when no personal vault is configured, when
+  // nothing matches, or on approval: the user accepting the prompt when the
+  // client can show one, otherwise approve_hold set to the token for exactly
+  // this content and `target` (an issue ID, when there is one). approve_hold is
+  // ignored whenever a prompt can be shown. `signal` is the tool call's, so
+  // cancelling the call also cancels a pending prompt.
+  async function guardStationWrite(
+    v: StationVaultRuntime,
+    tool: string,
+    outgoing: Outgoing,
+    hold: HoldOptions & { previous?: Outgoing; target?: string },
+  ): Promise<ToolResponse | null> {
+    const { approveHold, previous, target, signal } = hold;
+    if (personalVaults.length === 0) return null;
+    const token = holdToken({ vault: v.name, tool, target, outgoing }, holdSecret);
+    const prompt = canPrompt();
+    if (!prompt && approveHold === token) return null;
+    const matches = checkOutgoing(outgoing, await personalSources(), previous);
+    if (matches.length === 0) return null;
+
+    const head = `Held: possible personal content — nothing was sent to station vault "${v.name}".`;
+    const lines = matches.map((m) => `- ${describeMatch(m)}`);
+    if (prompt) {
+      const result = await askToSend(v, lines, signal);
+      if (result.answer === 'accept') return null;
+      if (result.answer === 'refuse') return err([head, ...lines, result.why].join('\n'));
+      if (approveHold === token) return null;
+    }
+    const stale = approveHold !== undefined ? ['approve_hold did not match this content, so it was checked again.'] : [];
+    return err([
+      head,
+      ...lines,
+      ...stale,
+      `Rewrite the content without it, or ask the user whether to send it as-is. If they approve, call ${tool} again with the same arguments plus approve_hold: "${token}".`,
+    ].join('\n'));
+  }
+
+  function noteGuard(v: VaultRuntime, tool: string, hold: HoldOptions): StationWriteGuard | undefined {
+    if (v.type !== 'station') return undefined;
+    return (outgoing, previous) => guardStationWrite(v, tool, outgoing, { ...hold, previous });
   }
 
   // Run an issue operation. A station `not_found` whose message names the
@@ -651,8 +815,9 @@ export function createMcpServer(
         'Cannot set tool-managed fields (title, date, tags, related) — use the typed params for those.'
       ),
       vault: writeVaultParam,
+      approve_hold: approveHoldParam,
     },
-    async ({ title, content, path: notePath, tags, related, frontmatter, vault }) => {
+    async ({ title, content, path: notePath, tags, related, frontmatter, vault, approve_hold }, { signal }: { signal?: AbortSignal } = {}) => {
       const wv = resolveWriteVault(vault);
       if (isToolError(wv)) return wv;
       const slug = notePath ?? ('inbox/' + NoteStore.makeSlug(title));
@@ -676,7 +841,12 @@ export function createMcpServer(
         if (wv.type === 'local' && (await wv.noteStore.get(slug))) {
           return exists;
         }
-        note = await writeNote(wv, { slug, title, content, tags, related, frontmatter }, null, { createOnly: true });
+        const outcome = await writeNote(wv, { slug, title, content, tags, related, frontmatter }, null, {
+          createOnly: true,
+          guard: noteGuard(wv, 'create_note', { approveHold: approve_hold, signal }),
+        });
+        if (!outcome.ok) return outcome.held;
+        note = outcome.note;
         await rebuildIndex(wv);
       } catch (e) {
         if (e instanceof StationApiError && e.code === 'conflict') return exists;
@@ -705,8 +875,9 @@ export function createMcpServer(
         'Cannot set tool-managed fields (title, date, tags, related) — use the typed params for those.'
       ),
       vault: writeVaultParam,
+      approve_hold: approveHoldParam,
     },
-    async ({ slug, title, content, tags, related, frontmatter, vault }) => {
+    async ({ slug, title, content, tags, related, frontmatter, vault, approve_hold }, { signal }: { signal?: AbortSignal } = {}) => {
       const wv = resolveWriteVault(vault);
       if (isToolError(wv)) return wv;
       if (!isValidSlug(slug)) return slugValidationError(slug);
@@ -722,7 +893,7 @@ export function createMcpServer(
         if (!resolved.ok) {
           return err(resolved.error);
         }
-        note = await writeNote(
+        const outcome = await writeNote(
           wv,
           {
             slug,
@@ -733,7 +904,10 @@ export function createMcpServer(
             frontmatter: resolved.frontmatter,
           },
           existing,
+          { guard: noteGuard(wv, 'update_note', { approveHold: approve_hold, signal }) },
         );
+        if (!outcome.ok) return outcome.held;
+        note = outcome.note;
         await rebuildIndex(wv);
       } catch (e) {
         return err(`Failed to write note "${slug}": ${errorMessage(e)}`);
@@ -758,11 +932,13 @@ export function createMcpServer(
         'Defaults to false — a missing heading errors with the note\'s existing headings so you can correct it.'
       ),
       vault: writeVaultParam,
+      approve_hold: approveHoldParam,
     },
-    async ({ slug, heading, content, create_if_missing, vault }) => {
+    async ({ slug, heading, content, create_if_missing, vault, approve_hold }, { signal }: { signal?: AbortSignal } = {}) => {
       const wv = resolveWriteVault(vault);
       if (isToolError(wv)) return wv;
-      return surgicalWrite(wv, slug, 'Failed to append to note', (note) => {
+      const hold = { tool: 'append_to_section', approveHold: approve_hold, signal };
+      return surgicalWrite(wv, slug, 'Failed to append to note', hold, (note) => {
         const result = appendToSection(note.content, heading, content, create_if_missing);
         if (!result.ok) {
           if (result.reason === 'missing') {
@@ -793,11 +969,13 @@ export function createMcpServer(
         'Defaults to false — a non-unique old_string errors with the match count so you can disambiguate.'
       ),
       vault: writeVaultParam,
+      approve_hold: approveHoldParam,
     },
-    async ({ slug, old_string, new_string, replace_all, vault }) => {
+    async ({ slug, old_string, new_string, replace_all, vault, approve_hold }, { signal }: { signal?: AbortSignal } = {}) => {
       const wv = resolveWriteVault(vault);
       if (isToolError(wv)) return wv;
-      return surgicalWrite(wv, slug, 'Failed to edit note', (note) => {
+      const hold = { tool: 'edit_note', approveHold: approve_hold, signal };
+      return surgicalWrite(wv, slug, 'Failed to edit note', hold, (note) => {
         const result = editBody(note.content, old_string, new_string, replace_all);
         if (!result.ok) {
           if (result.reason === 'not_found') {
@@ -830,8 +1008,9 @@ export function createMcpServer(
       add_related: z.preprocess(coerceStringArray, z.array(z.string()).optional()).describe('Related slugs to add (union; re-adding an existing one is a no-op)'),
       remove_related: z.preprocess(coerceStringArray, z.array(z.string()).optional()).describe('Related slugs to remove (removing an absent one is a no-op)'),
       vault: writeVaultParam,
+      approve_hold: approveHoldParam,
     },
-    async ({ slug, set, add_tags, remove_tags, add_related, remove_related, vault }) => {
+    async ({ slug, set, add_tags, remove_tags, add_related, remove_related, vault, approve_hold }, { signal }: { signal?: AbortSignal } = {}) => {
       const wv = resolveWriteVault(vault);
       if (isToolError(wv)) return wv;
       if (!isValidSlug(slug)) return slugValidationError(slug);
@@ -858,7 +1037,8 @@ export function createMcpServer(
         ? Object.fromEntries(Object.entries(set).filter(([k]) => k !== 'updated'))
         : undefined;
 
-      return surgicalWrite(wv, slug, 'Failed to edit frontmatter of note', (note) => {
+      const hold = { tool: 'edit_frontmatter', approveHold: approve_hold, signal };
+      return surgicalWrite(wv, slug, 'Failed to edit frontmatter of note', hold, (note) => {
         const result = applyFrontmatterEdit(
           {
             tags: note.frontmatter.tags,
@@ -1124,14 +1304,15 @@ export function createMcpServer(
       source: z.string().min(1).optional().describe('Agent session or tool filing the issue (default: the MCP client name)'),
       confirm_new: z.boolean().optional().describe('Skip the duplicate check. Pass only after reviewing possible-duplicate candidates and deciding none match.'),
       vault: stationVaultParam,
+      approve_hold: approveHoldParam,
     },
-    async ({ title, body, project, repos, labels, blocked_by, found_during, owner, source, confirm_new, vault }) => {
+    async ({ title, body, project, repos, labels, blocked_by, found_during, owner, source, confirm_new, vault, approve_hold }, { signal }: { signal?: AbortSignal } = {}) => {
       const v = resolveStationVault(vault, issuesOnly);
       if (isToolError(v)) return v;
       return issueCall(v, undefined, 'Failed to create issue', async () => {
-        const res = await v.client.createIssue({
+        const request = {
           title,
-          'created-by': { kind: 'agent', source: source ?? clientName() },
+          'created-by': { kind: 'agent' as const, source: source ?? clientName() },
           ...defined({
             body,
             project,
@@ -1142,7 +1323,13 @@ export function createMcpServer(
             owner,
             confirm_new,
           }),
-        });
+        };
+        // confirm_new changes no content, so a re-send after the duplicate check keeps its approval.
+        const { confirm_new: _confirmNew, ...content } = request;
+        const outgoing = { texts: collectStrings(content), links: [] };
+        const held = await guardStationWrite(v, 'create_issue', outgoing, { approveHold: approve_hold, signal });
+        if (held) return held;
+        const res = await v.client.createIssue(request);
         if (res.result === 'possible-duplicates') {
           return ok(
             `No issue was created: ${res.candidates.length} existing issue(s) may already cover this.\n\n`
@@ -1170,8 +1357,9 @@ export function createMcpServer(
       id: issueIdParam,
       ...ISSUE_UPDATE_PARAMS,
       vault: stationVaultParam,
+      approve_hold: approveHoldParam,
     },
-    async ({ id, vault, ...fields }) => {
+    async ({ id, vault, approve_hold, ...fields }, { signal }: { signal?: AbortSignal } = {}) => {
       const v = resolveStationVault(vault, issuesOnly);
       if (isToolError(v)) return v;
       const invalid = invalidIssueId(id);
@@ -1185,6 +1373,9 @@ export function createMcpServer(
         return err(`update_issue on "${id}" changed nothing — supply at least one field to change.`);
       }
       return issueCall(v, id, `Failed to update issue "${id}"`, async () => {
+        const outgoing = { texts: collectStrings(set), links: [] };
+        const held = await guardStationWrite(v, 'update_issue', outgoing, { approveHold: approve_hold, signal, target: id });
+        if (held) return held;
         const { issue } = await v.client.updateIssue({ id, set: set as IssueFieldsUpdate });
         return ok(issueMarkdown(issue));
       });
@@ -1201,12 +1392,19 @@ export function createMcpServer(
       body: z.string().min(1).describe('Markdown comment text'),
       author: z.string().min(1).optional().describe('Comment author (default: the MCP client name)'),
       vault: stationVaultParam,
+      approve_hold: approveHoldParam,
     },
-    async ({ id, body, author, vault }) => {
+    async ({ id, body, author, vault, approve_hold }, { signal }: { signal?: AbortSignal } = {}) => {
       const v = resolveStationVault(vault, issuesOnly);
       if (isToolError(v)) return v;
       return issueCall(v, id, `Failed to comment on issue "${id}"`, async () => {
-        const { issue } = await v.client.commentIssue({ id, author: author ?? clientName(), body });
+        const request = { id, author: author ?? clientName(), body };
+        // Everything sent but the issue ID, which binds the approval as `target` instead.
+        const { id: _id, ...content } = request;
+        const outgoing = { texts: collectStrings(content), links: [] };
+        const held = await guardStationWrite(v, 'comment_issue', outgoing, { approveHold: approve_hold, signal, target: id });
+        if (held) return held;
+        const { issue } = await v.client.commentIssue(request);
         return ok(issueMarkdown(issue));
       });
     }

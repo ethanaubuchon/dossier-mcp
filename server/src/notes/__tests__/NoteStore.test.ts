@@ -270,6 +270,35 @@ describe('NoteStore', () => {
     await fs.chmod(subdir, 0o755); // cleanup
   });
 
+  describe('listRaw', () => {
+    const enoent = () => Object.assign(new Error('gone'), { code: 'ENOENT' });
+
+    test('returns raw text even when frontmatter does not parse', async () => {
+      await fs.writeFile(path.join(dir, 'broken.md'), '---\ntitle: a: b: [\n---\nbody\n');
+      expect(await store.listRaw()).toEqual([{ slug: 'broken', raw: '---\ntitle: a: b: [\n---\nbody\n' }]);
+    });
+
+    test('re-walks once when a file disappears between walk and read', async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const once = jest.spyOn(store as any, 'readRawOnce')
+        .mockRejectedValueOnce(enoent())
+        .mockResolvedValueOnce([{ slug: 'moved/note', raw: 'x' }]);
+      expect(await store.listRaw()).toEqual([{ slug: 'moved/note', raw: 'x' }]);
+      expect(once).toHaveBeenCalledTimes(2);
+    });
+
+    test('rejects when a file disappears again on the re-walk', async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      jest.spyOn(store as any, 'readRawOnce').mockRejectedValue(enoent());
+      await expect(store.listRaw()).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    test('rejects when the vault root is gone', async () => {
+      await fs.rm(dir, { recursive: true, force: true });
+      await expect(store.listRaw()).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+  });
+
   describe('empty directory cleanup on delete', () => {
     test('delete removes empty parent directory', async () => {
       await store.upsert({ slug: 'projects/orphan/deep-note', title: 'Deep Note', content: 'Body.' });
