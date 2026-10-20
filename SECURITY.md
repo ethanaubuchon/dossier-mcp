@@ -34,7 +34,7 @@ It runs as a **child process of your MCP client** (e.g. Claude Code), launched b
 | The user running the client | Trusted | Already has full filesystem access; this server grants nothing new. |
 | The MCP client / agent | Semi-trusted | Issues tool calls. Presumed non-malicious but **not** presumed correct — an agent can be steered by prompt injection in the content it reads. |
 | Note file contents | **Untrusted** | Files arrive by agent write, by hand, and by file sync. Treated as hostile input by the parser. |
-| Configured station vaults | Trusted for content they return; a destination for writes | The only network peers, and only when configured. Writes reach a station only after the privacy check below. Reads are not checked: they send the station slugs, search queries and issue filters (see below). |
+| Configured station vaults | Trusted for content they return; a destination for writes | The only network peers, and only when configured. Writes reach a station only after the privacy check below. A read-wide `get_note` doesn't send a slug found in a personal vault; list prefixes, search queries, issue filters and `note_history` slugs are sent as given (see below). |
 | The network otherwise | Not in scope | No listener, and no connections other than to configured stations. See below. |
 
 ### Primary threats considered
@@ -61,7 +61,12 @@ The server communicates with its client exclusively over stdin/stdout using the 
 - Its **only outbound connections are to configured station vaults** (`type: station` in the config), made with `fetch` in `createStationRuntime` (`server/src/mcp/server.ts`) through the `dossier-station-api` client. With no station configured it makes no connections. There is no telemetry or analytics. Verifiable: `grep -rn "fetch(\|https\?\.\|axios\|net\.\|WebSocket" server/src --exclude-dir=__tests__` matches only `createStationRuntime`.
 - Its runtime dependencies are the MCP SDK, `chokidar` (file watching), `gray-matter` (frontmatter), `js-yaml`, `slugify`, `zod`, and the workspace's `dossier-station-api`. Only the last makes requests, and only to the station URL it is given.
 
-Consequently, local note **content** leaves the machine through this server only as part of a write sent to a configured station, and that write passes the check below first. **Reads are not checked**, and they do send data to every configured station: `get_note` without `vault` asks each station for the slug (so reading `health/therapist-notes` sends that slug), `list_notes` sends its path prefix and `search_notes` its query, and `query_issues` sends its filters. Anything else that reaches a network does so via your MCP client — the same path any file you show your agent already takes.
+Consequently, local note **content** leaves the machine through this server only as part of a write sent to a configured station, and that write passes the check below first. Reads that span all vaults behave as follows:
+
+- **`get_note` without `vault`** reads local vaults first. When the slug is found in a personal vault, it is not sent: each station is asked for its full note listing (no path, only whether a doc or an issue is wanted) and the slug is looked up locally, which keeps cross-vault collision detection. A slug not found in a personal vault is sent to each station.
+- **`list_notes`** sends its path prefix and **`search_notes`** its query to every station. The station-only tools send what they are given: **`query_issues`** its filters and **`note_history`** its slug. None of these are checked. Passing a local `vault` keeps a prefix or query off stations.
+
+Anything else that reaches a network does so via your MCP client — the same path any file you show your agent already takes.
 
 ### Privacy check on station-bound writes
 
@@ -145,6 +150,10 @@ The check is deterministic and exact. It does not catch:
 - sensitive content that isn't in a personal note at all
 
 Pattern scanning (account numbers, amounts, a term list) and fuzzy overlap are not implemented. When the client can't show an elicitation prompt, the `approve_hold` route trusts the agent to ask the user first. The reverse also holds: overlap isn't judged for intent, so public text that a personal note also contains is held too. Treat the check as a guard against an agent pasting what it read, not as data-loss prevention.
+
+### Read prefixes and queries reach stations unchecked
+
+A read-wide `list_notes` prefix or `search_notes` query is sent to every configured station, even when it names a personal topic (`health/`, a person's name). Only `get_note` keeps personal slugs local. Skipping stations whenever a prefix matched a personal folder was not adopted, because shared folder names such as `projects/` would silently drop station results. Pass a local `vault` when a prefix or query is sensitive.
 
 ### No authentication or authorization
 

@@ -486,10 +486,10 @@ export function createMcpServer(
   // Run `fn` on each vault of a read. A local failure fails the call as before.
   // A station failure fails it only when the caller named that vault; on a
   // read-wide call the station is skipped and a notice says why.
-  async function readEach<T>(
-    vaults: VaultRuntime[],
+  async function readEach<T, V extends VaultRuntime = VaultRuntime>(
+    vaults: V[],
     explicit: boolean,
-    fn: (v: VaultRuntime) => Promise<T[]>,
+    fn: (v: V) => Promise<T[]>,
   ): Promise<{ items: T[]; notices: string[] }> {
     const items: T[] = [];
     const notices: string[] = [];
@@ -719,6 +719,7 @@ export function createMcpServer(
     'list_notes',
     'List notes in the knowledge base, sorted by date (newest first). Optionally filter by slug prefix to scope results to a folder. '
     + 'By default spans all configured vaults; each result carries a `vault` field naming its source vault. '
+    + 'The path prefix is sent to every station vault on a call that spans them; pass a local `vault` to keep it off stations. '
     + 'Notes tagged with the vault\'s default-excluded tags (e.g. archived, historical) are omitted by default; pass exclude_tags: [] to include them, or a custom list to override the default. '
     + 'If you haven\'t already, call get_vault_context first to orient yourself to this vault.',
     {
@@ -758,7 +759,8 @@ export function createMcpServer(
     'get_note',
     'Get the full content and metadata of a specific note by its slug. ' +
     'By default resolves the slug across all vaults (default vault first); pass `vault` to read from a specific vault. '
-    + 'If the slug exists in more than one vault, the call errors listing them so you can disambiguate with `vault`.',
+    + 'If the slug exists in more than one vault, the call errors listing them so you can disambiguate with `vault`. '
+    + 'A slug found in a personal vault is not sent to station vaults; they are checked for a collision by listing their notes instead.',
     {
       slug: z.string().describe('The note slug (e.g. "react-hooks-rules")'),
       vault: z.string().optional().describe(
@@ -778,24 +780,44 @@ export function createMcpServer(
           return ok(note.raw);
         });
       }
-      // Omitted vault → resolve default-first across all vaults. Raw is returned
-      // unchanged (round-trips into update_note); a cross-vault slug collision
-      // errors so the caller passes `vault` explicitly. A station that can't be
-      // reached is skipped with a notice, so a hit elsewhere can't be checked
-      // against it for a collision.
+      // Omitted vault → read local vaults, then stations. Raw is returned
+      // unchanged (round-trips into update_note). A slug found in more than one
+      // vault errors, listing them default first, so the caller passes `vault`.
+      //
+      // A slug found in a personal vault is never sent to a station: each
+      // station's full listing is fetched instead and searched here, so a
+      // station note at the same slug still counts as a collision. A station
+      // that can't be reached is skipped with a notice, and goes unchecked.
       return withToolError(`Failed to read note "${slug}"`, async () => {
-        const { items: hits, notices } = await readEach(orderedVaults, false, async (v) => {
+        // A station hit found by listing carries no note. It only occurs next to
+        // a personal hit, so it is never the single hit that gets returned.
+        type Hit = { vault: string; note?: Note };
+        const locals = orderedVaults.filter((v): v is LocalVaultRuntime => v.type === 'local');
+        const stations = orderedVaults.filter((v): v is StationVaultRuntime => v.type === 'station');
+        const local = await readEach<Hit, LocalVaultRuntime>(locals, false, async (v) => {
           const note = await readNote(v, slug);
           return note ? [{ vault: v.name, note }] : [];
         });
+        const personalHit = local.items.some((h) => personalVaults.some((p) => p.name === h.vault));
+        const remote = await readEach<Hit, StationVaultRuntime>(stations, false, async (v) => {
+          if (personalHit) {
+            const { notes } = await v.client.listNotes({ kind: noteKind(slug), exclude_tags: [] });
+            return notes.some((n) => n.slug === slug) ? [{ vault: v.name }] : [];
+          }
+          const note = await readNote(v, slug);
+          return note ? [{ vault: v.name, note }] : [];
+        });
+        const rank = (h: Hit) => orderedVaults.findIndex((v) => v.name === h.vault);
+        const hits = [...local.items, ...remote.items].sort((a, b) => rank(a) - rank(b));
+        const notices = remote.notices;
         if (hits.length === 0) {
           return err(`Note "${slug}" not found.`, notices);
         }
         if (hits.length > 1) {
           const names = hits.map((h) => `"${h.vault}"`).join(', ');
-          return err(`Note "${slug}" exists in multiple vaults: ${names}. Pass vault to disambiguate.`);
+          return err(`Note "${slug}" exists in multiple vaults: ${names}. Pass vault to disambiguate.`, notices);
         }
-        return ok(hits[0].note.raw, notices);
+        return ok(hits[0].note!.raw, notices);
       });
     }
   );
@@ -1106,6 +1128,7 @@ export function createMcpServer(
     'Search the knowledge base using keyword search. Returns matching notes scored by relevance, with excerpts. '
     + 'By default spans all configured vaults, merging results by score; each result carries a `vault` field naming its source vault. '
     + 'If a station vault can\'t be reached, the other vaults still answer and a notice follows the results. '
+    + 'The query is sent to every station vault on a call that spans them; pass a local `vault` to keep it off stations. '
     + 'Notes tagged with the vault\'s default-excluded tags (e.g. archived, historical) are omitted by default; pass exclude_tags: [] to include them, or a custom list to override the default. '
     + 'Pass type: "issue" to search only issues (notes under issues/), or type: "doc" for everything else.',
     {

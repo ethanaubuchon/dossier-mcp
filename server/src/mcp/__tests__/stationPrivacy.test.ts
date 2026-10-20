@@ -1,7 +1,8 @@
 /**
  * The privacy check on station-bound writes, end to end: a personal local
  * vault, an optional shared local vault, and the stub station. A held write
- * must never reach the station.
+ * must never reach the station, and a read-wide get_note of a personal note
+ * must never send the station its slug.
  */
 
 import fs from 'fs/promises';
@@ -54,7 +55,7 @@ describe('privacy check on station writes', () => {
   }
 
   const text = (r: ToolResult) => r.content[0].text;
-  const writes = () => stub.requests.filter((r) => r.endpoint !== 'getNote');
+  const writes = () => stub.requests.filter((r) => r.endpoint !== 'getNote' && r.endpoint !== 'listNotes');
   const tokenOf = (r: ToolResult) => /approve_hold: "(hold-[0-9a-f]+)"/.exec(text(r))?.[1];
 
   beforeEach(async () => {
@@ -328,5 +329,83 @@ describe('privacy check on station writes', () => {
     expect(r.isError).toBe(true);
     expect(text(r)).toMatch(/^Failed to comment on issue "STN-1": /);
     expect(writes()).toEqual([]);
+  });
+
+  describe('read-wide get_note keeps personal slugs off the station', () => {
+    const mentionsSlug = (slug: string) => stub.requests.some((r) => JSON.stringify(r.body).includes(slug));
+
+    test('a personal note is read without sending its slug or folder', async () => {
+      const r = await call('get_note', { slug: 'finances/budget' });
+      expect(r.isError).toBeFalsy();
+      expect(text(r)).toContain(BUDGET_LINE);
+      expect(stub.requests).toEqual([{ endpoint: 'listNotes', body: { kind: 'doc', exclude_tags: [] } }]);
+      expect(mentionsSlug('finances')).toBe(false);
+    });
+
+    test('a station note at a personal slug is still a collision, found by listing', async () => {
+      stub.notes.set('finances/budget', { frontmatter: { title: 'Team budget' }, body: 'Team spend.\n' });
+      const r = await call('get_note', { slug: 'finances/budget' });
+      expect(r.isError).toBe(true);
+      expect(text(r)).toBe('Note "finances/budget" exists in multiple vaults: "personal", "team". Pass vault to disambiguate.');
+      expect(stub.requests.map((q) => q.endpoint)).toEqual(['listNotes']);
+      expect(mentionsSlug('finances')).toBe(false);
+    });
+
+    test('a personal note under issues/ lists the station\'s issues', async () => {
+      await personal.noteStore.upsert({ slug: 'issues/STN-1', title: 'Mine', content: 'Private.', tags: [], related: [] });
+      const r = await call('get_note', { slug: 'issues/STN-1' });
+      expect(text(r)).toBe('Note "issues/STN-1" exists in multiple vaults: "personal", "team". Pass vault to disambiguate.');
+      expect(stub.requests).toEqual([{ endpoint: 'listNotes', body: { kind: 'issue', exclude_tags: [] } }]);
+    });
+
+    test('a collision lists the default vault first, even when it is a station', async () => {
+      stub.notes.set('finances/budget', { frontmatter: { title: 'Team budget' }, body: 'Team spend.\n' });
+      wire([personal, team], 'team');
+      const r = await call('get_note', { slug: 'finances/budget' });
+      expect(text(r)).toBe('Note "finances/budget" exists in multiple vaults: "team", "personal". Pass vault to disambiguate.');
+      expect(stub.requests.map((q) => q.endpoint)).toEqual(['listNotes']);
+    });
+
+    test('an unreachable station is skipped with a notice on a personal hit', async () => {
+      await stub.close();
+      const r = await call('get_note', { slug: 'finances/budget' });
+      expect(r.isError).toBeFalsy();
+      expect(text(r)).toContain(BUDGET_LINE);
+      expect(r.content[1].text).toMatch(/^Station vault "team" unavailable/);
+    });
+
+    test('a slug that is not in a personal vault is asked for directly', async () => {
+      const shared = await localVault('team-docs', true);
+      await shared.noteStore.upsert({ slug: 'docs/onboarding', title: 'Onboarding', content: 'Welcome.', tags: [], related: [] });
+      wire([personal, shared, team]);
+      const hit = await call('get_note', { slug: 'docs/onboarding' });
+      expect(hit.isError).toBeFalsy();
+      const station = await call('get_note', { slug: 'docs/runbook' });
+      expect(text(station)).toContain('Restart the service.');
+      expect(stub.requests).toEqual([
+        { endpoint: 'getNote', body: { slug: 'docs/onboarding' } },
+        { endpoint: 'getNote', body: { slug: 'docs/runbook' } },
+      ]);
+    });
+
+    test('a personal hit alongside a shared hit still errors, and the station only lists', async () => {
+      const shared = await localVault('team-docs', true);
+      await shared.noteStore.upsert({ slug: 'finances/budget', title: 'Budget', content: 'Shared.', tags: [], related: [] });
+      wire([personal, shared, team]);
+      const r = await call('get_note', { slug: 'finances/budget' });
+      expect(text(r)).toBe('Note "finances/budget" exists in multiple vaults: "personal", "team-docs". Pass vault to disambiguate.');
+      expect(stub.requests.map((q) => q.endpoint)).toEqual(['listNotes']);
+    });
+
+    test('a collision still reports a station that went unchecked', async () => {
+      const shared = await localVault('team-docs', true);
+      await shared.noteStore.upsert({ slug: 'finances/budget', title: 'Budget', content: 'Shared.', tags: [], related: [] });
+      wire([personal, shared, team]);
+      await stub.close();
+      const r = await call('get_note', { slug: 'finances/budget' });
+      expect(r.isError).toBe(true);
+      expect(text(r)).toMatch(/exists in multiple vaults: "personal", "team-docs"/);
+      expect(r.content[1].text).toMatch(/^Station vault "team" unavailable/);
+    });
   });
 });
