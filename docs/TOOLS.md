@@ -19,6 +19,43 @@ Detailed behavior of every MCP tool and resource the server registers (`server/s
   - **Degraded reads.** When `vault` is omitted and a station fails (unreachable, timed out, or an error response), the call still answers from the other vaults and appends a second text item: `Station vault "<name>" unavailable (<code>: <message>); results cover the other vaults only.` The first item keeps its usual shape. For `get_note`, a hit elsewhere can't be checked against the station for a collision. Naming the station in `vault` turns the failure into a normal error.
   - **Writes** (`create_note`, `update_note`, `append_to_section`, `edit_note`, `edit_frontmatter`) read the note from the station, apply the same change and frontmatter merge as a local write, and store the result with the station's `write` verb. `create_note` asks the station to refuse an existing slug. Frontmatter lists and objects already on a station note are kept on write, though, as for local notes, new list or object values can't be set through these tools. Editing an existing station note never adds a `title`, `date`, `tags`, or `related` it didn't have, unless the edit sets them.
   - **Edits are read-then-write.** The `write` verb replaces the stored note and carries no revision check, so two clients editing the same station note at once can lose one edit.
+  - **Privacy check.** Every station-bound write — these note writes and `create_issue`, `update_issue`, `comment_issue` — is checked against the personal vaults (local vaults without `sync: git-publication`) before anything is sent. It is held when its content:
+    - links to a personal note. A link is a `[[wiki-link]]` target, a `note://` URI, a `related` entry, or a bare path containing `/` (e.g. `finances/budget`), when it equals a personal slug (compared case-insensitively, trailing `.md` and punctuation ignored). A slug that also exists on the station is still held. That usually includes `[[profile]]`, since a station's own context note is typically `profile` too.
+    - is written to a station path equal to a personal slug (same comparison), reported separately as a path match. This includes `create_note`'s default `inbox/<title-slug>` when that slug exists in a personal vault. Editing a station note that already lives at such a path isn't held for the path.
+    - reproduces personal text: **12 consecutive normalised tokens** found in a personal note's raw file (frontmatter included, so a note whose frontmatter doesn't parse still counts) or in a personal vault's context file. Every string in the write is checked, frontmatter keys included.
+      - **Normalisation:** whole lines that are exactly a git trailer (`…-by: <up to five words> <email>`) or the Claude Code PR footer are dropped. Default-ignorable characters (zero-width space, soft hyphen) are removed. Then Unicode NFKC, lowercase, and a split on everything that isn't a letter or digit, so `Jane's` is two tokens.
+      - **Runs:** blank lines, headings and task-list items (`- [ ]`, `- [x]`) separate runs, and each heading or task item stands alone. Prose, list items, table rows, quotes and code join across lines, so a copied list of short facts is held.
+
+    Overlap is not judged for intent. Public text that a personal note happens to contain is held too: a release checklist, a config table or a command block copied into a personal project note, then repeated in a station write. Approve these like any other hold.
+
+    On a note edit, links and runs already in the stored station note are not checked again. Issue edits get no such subtraction: `update_issue` and `comment_issue` check everything they send, so text that was approved once in an issue is held again if a later update repeats it.
+
+    Personal notes are read raw from disk at check time.
+    - These fail the write: a personal vault folder that is missing (e.g. an unmounted drive), and a personal file or directory that exists but can't be read.
+    - A dangling symlink is skipped.
+    - A file that disappears while the check runs (e.g. renamed) triggers one full rescan, so a moved note is still checked; if a file disappears again, the write fails.
+    - Syncthing `.sync-conflict` copies are not sources.
+
+    A held write returns, with `isError: true`:
+    - `Held: possible personal content — nothing was sent to station vault "<name>".`
+    - one line per match: `link to personal note "<slug>" (vault "<v>")`, `station path matches personal note "<slug>" (vault "<v>")`, or `verbatim text from "<slug or context file>" (vault "<v>"): "<matched tokens>"`, with at most 5 verbatim matches, one per source
+    - how to proceed
+
+    Approval works in one of two ways:
+    - **Elicitation.** If the client supports form elicitation, the user is asked first.
+      - Accepting sends the write.
+      - Declining returns the held result with `The user declined sending it.` and no token.
+      - A prompt that errors or times out (after 10 minutes) returns the held result with `The user's approval couldn't be obtained (…)`, also with no token.
+      - Cancelling the tool call cancels its prompt, so a late answer can't send a write the agent already saw fail.
+      - `approve_hold` is ignored for these clients, so only the user's answer releases a write. The exception is a client that rejects the prompt as an unknown method, which shows nothing; that is treated as having no form elicitation.
+    - **Token.** For clients without form elicitation (including those declaring only URL elicitation, and those that reject the prompt as an unknown method), the held result ends with a token. Calling the same tool again with the same arguments plus `approve_hold: "<token>"` sends that exact content.
+      - The token covers the vault, the tool and everything the write would send, including the issue ID for `update_issue` and `comment_issue`. A token for different content is ignored and the write is checked again.
+      - `create_issue`'s `confirm_new` is not part of the token, so re-sending an approved issue past the duplicate check needs no second approval.
+      - Repeat the arguments as they were, including the order of keys in objects such as `frontmatter`.
+      - A note write retried on a later day is held again, because its `updated` stamp changed.
+      - Tokens are keyed with a per-process secret, so they come only from held results and stop working when the server restarts.
+
+    Every station-capable write tool takes the optional `approve_hold` param. With no personal vault configured, nothing is checked. Reads are not checked. Limits are in [SECURITY.md](../SECURITY.md#the-station-write-check-catches-copies-and-links-not-meaning).
   - **Issues are not notes here.** The station's `write` verb takes docs only, so on a station the write tools refuse any `issues/…` slug before calling it and point at the [issue tools](#issue-tools). Issues are still readable through the read tools.
   - **Refused:** `delete_note` and `move_note` (the station has no such operation). `list_todos` skips stations with a notice (`Station vault "<name>" is not scanned for todos.`) and errors when one is named.
   - `get_vault_context` on a station returns the raw Markdown (frontmatter + body) of the note named by `context_file` without `.md` (default `profile`), as a local vault returns its raw context file. Station errors carry their code, e.g. `Failed to write note "x": conflict: …`.

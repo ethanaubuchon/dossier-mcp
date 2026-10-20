@@ -11,6 +11,9 @@ import { todayLocal } from './dates.js';
 // slugify CJS/ESM compat: the callable may be the default export or the module itself
 const slugify = (slugifyLib as unknown as (text: string, options?: object) => string);
 
+/** Files `listRaw` reads at once, to stay well under the open-file limit. */
+const RAW_READ_BATCH = 64;
+
 export class NoteStore extends EventEmitter {
   private notesDir: string;
   private watcher: FSWatcher | null = null;
@@ -130,6 +133,40 @@ export class NoteStore extends EventEmitter {
     return this.readAllNotes();
   }
 
+  /**
+   * Every note's slug and raw file text, frontmatter included and unparsed, so
+   * a note with broken frontmatter is still returned. A missing vault root, or
+   * a file or directory inside it that can't be read, rejects the whole call;
+   * a symlink whose target is gone is skipped. A file that disappears between
+   * the walk and the read (e.g. renamed) triggers one full re-walk, so a moved
+   * note is still returned; a second disappearance rejects. Files are read a
+   * bounded number at a time.
+   */
+  async listRaw(): Promise<Array<{ slug: string; raw: string }>> {
+    const root = await fs.stat(this.notesDir);
+    if (!root.isDirectory()) throw new Error(`Vault root "${this.notesDir}" is not a directory`);
+    try {
+      return await this.readRawOnce();
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+      return this.readRawOnce();
+    }
+  }
+
+  private async readRawOnce(): Promise<Array<{ slug: string; raw: string }>> {
+    const mdFiles = await this.walkMdFiles(this.notesDir, undefined, true);
+    const out: Array<{ slug: string; raw: string }> = [];
+    for (let i = 0; i < mdFiles.length; i += RAW_READ_BATCH) {
+      out.push(...(await Promise.all(
+        mdFiles.slice(i, i + RAW_READ_BATCH).map(async (filePath) => ({
+          slug: path.relative(this.notesDir, filePath).replace(/\.md$/, ''),
+          raw: await fs.readFile(filePath, 'utf-8'),
+        })),
+      )));
+    }
+    return out;
+  }
+
   private async readAllNotes(): Promise<Array<NoteListItem & { content: string }>> {
     const mdFiles = await this.walkMdFiles(this.notesDir);
     const notes = await Promise.all(
@@ -156,17 +193,26 @@ export class NoteStore extends EventEmitter {
       .sort((a, b) => b.frontmatter.date.localeCompare(a.frontmatter.date));
   }
 
-  private async walkMdFiles(dir: string, visited?: Set<string>): Promise<string[]> {
+  /**
+   * Every `.md` file under `dir`. Unreadable directories and broken symlinks
+   * are skipped, unless `strict`, which rethrows every error except a missing
+   * path (a dangling symlink).
+   */
+  private async walkMdFiles(dir: string, visited?: Set<string>, strict = false): Promise<string[]> {
     const seen = visited ?? new Set<string>();
     const realDir = await fs.realpath(dir).catch(() => dir);
     if (seen.has(realDir)) return [];
     seen.add(realDir);
 
+    const tolerate = (e: unknown) => {
+      if (strict && (e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+    };
     const results: string[] = [];
     let entries: import('fs').Dirent[];
     try {
       entries = await fs.readdir(dir, { withFileTypes: true });
-    } catch {
+    } catch (e) {
+      tolerate(e);
       return results;
     }
     for (const entry of entries) {
@@ -175,13 +221,16 @@ export class NoteStore extends EventEmitter {
       let isFile = entry.isFile();
       if (entry.isSymbolicLink()) {
         // Resolve the link target. stat() follows symlinks; lstat() does not.
-        const stat = await fs.stat(fullPath).catch(() => null);
+        const stat = await fs.stat(fullPath).catch((e) => {
+          tolerate(e);
+          return null;
+        });
         if (!stat) continue;
         isDir = stat.isDirectory();
         isFile = stat.isFile();
       }
       if (isDir) {
-        results.push(...(await this.walkMdFiles(fullPath, seen)));
+        results.push(...(await this.walkMdFiles(fullPath, seen, strict)));
       } else if (isFile && entry.name.endsWith('.md') && !fullPath.includes('.sync-conflict')) {
         results.push(fullPath);
       }

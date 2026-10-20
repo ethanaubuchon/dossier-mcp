@@ -85,6 +85,7 @@ async function main() {
       contextFile: vault.contextFile,
       noteStore,
       searchIndex,
+      shared: vault.sync === 'git-publication',
     };
     runtimes.push(runtime);
     localRuntimes.push(runtime);

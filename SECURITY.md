@@ -34,13 +34,14 @@ It runs as a **child process of your MCP client** (e.g. Claude Code), launched b
 | The user running the client | Trusted | Already has full filesystem access; this server grants nothing new. |
 | The MCP client / agent | Semi-trusted | Issues tool calls. Presumed non-malicious but **not** presumed correct — an agent can be steered by prompt injection in the content it reads. |
 | Note file contents | **Untrusted** | Files arrive by agent write, by hand, and by file sync. Treated as hostile input by the parser. |
-| The network | Not in scope | This server makes no network connections. See below. |
+| Configured station vaults | Trusted for content they return; a destination for writes | The only network peers, and only when configured. Writes reach a station only after the privacy check below. Reads are not checked: they send the station slugs, search queries and issue filters (see below). |
+| The network otherwise | Not in scope | No listener, and no connections other than to configured stations. See below. |
 
 ### Primary threats considered
 
 - **Path traversal** — a crafted slug reaching files outside the vault.
 - **Code execution via note content** — malicious data in a note file being executed during parsing.
-- **Silent data exfiltration** — note content leaving the machine.
+- **Silent data exfiltration** — note content leaving the machine, including personal notes carried into a station-bound write by an agent that read them.
 - **Data loss** — notes destroyed by malformed or hostile tool calls.
 
 ### Explicitly out of scope
@@ -54,13 +55,28 @@ It runs as a **child process of your MCP client** (e.g. Claude Code), launched b
 
 ### Stdio-only — no network listener
 
-The server communicates exclusively over stdin/stdout using the MCP SDK's `StdioServerTransport` (`server/src/mcp-entry.ts`).
+The server communicates with its client exclusively over stdin/stdout using the MCP SDK's `StdioServerTransport` (`server/src/mcp-entry.ts`).
 
 - It **opens no listening socket** and binds no port.
-- It **makes no outbound connections**. There are no HTTP clients, no sockets, no telemetry, and no analytics anywhere in `server/src`. Verifiable: `grep -rn "fetch(\|http\.\|https\.\|axios\|net\.\|WebSocket" server/src` returns nothing.
-- Its runtime dependencies are the MCP SDK, `chokidar` (file watching), `gray-matter` (frontmatter), `js-yaml`, `slugify`, and `zod`. None is a network client.
+- Its **only outbound connections are to configured station vaults** (`type: station` in the config), made with `fetch` in `createStationRuntime` (`server/src/mcp/server.ts`) through the `dossier-station-api` client. With no station configured it makes no connections. There is no telemetry or analytics. Verifiable: `grep -rn "fetch(\|https\?\.\|axios\|net\.\|WebSocket" server/src --exclude-dir=__tests__` matches only `createStationRuntime`.
+- Its runtime dependencies are the MCP SDK, `chokidar` (file watching), `gray-matter` (frontmatter), `js-yaml`, `slugify`, `zod`, and the workspace's `dossier-station-api`. Only the last makes requests, and only to the station URL it is given.
 
-Consequently, notes do not leave the machine through this server. Anything that reaches a network does so via your MCP client — the same path any file you show your agent already takes.
+Consequently, local note **content** leaves the machine through this server only as part of a write sent to a configured station, and that write passes the check below first. **Reads are not checked**, and they do send data to every configured station: `get_note` without `vault` asks each station for the slug (so reading `health/therapist-notes` sends that slug), `list_notes` sends its path prefix and `search_notes` its query, and `query_issues` sends its filters. Anything else that reaches a network does so via your MCP client — the same path any file you show your agent already takes.
+
+### Privacy check on station-bound writes
+
+Every write headed to a station — the note write tools on a station vault, and `create_issue`, `update_issue` and `comment_issue` — is checked against your **personal** vaults (local vaults without `sync: git-publication`) before anything is sent (`server/src/privacy/writeCheck.ts`). The write is held when its content:
+
+- **links to a personal note**: a `[[wiki-link]]`, a `note://` URI, a `related` entry, or a bare path such as `finances/budget`, compared case-insensitively;
+- **is written to a personal note's path**: a station note created at a path that a personal note also has, reported as a path match (editing a station note that already lives there isn't held for it); or
+- **reproduces personal text verbatim**: 12 consecutive normalised tokens (roughly words) found in a personal note's raw file or in a personal vault's context file (`profile.md`), which every session loads. Normalisation ignores case, punctuation, markdown syntax, whitespace and invisible characters such as zero-width spaces. A run may span prose, list items and table rows, so a copied list of short facts is caught, but not headings, task-list items or blank lines, so shared templates aren't. Exact git-trailer lines and the exact Claude Code PR footer are ignored on both sides.
+
+A held write returns an error starting `Held: possible personal content` that names each match, and nothing reaches the station. It is sent only after approval.
+
+- **Clients that support form elicitation:** the server asks the user directly, and only an explicit accept sends the write. A decline, a timeout (10 minutes) or a failed prompt all refuse it, and the `approve_hold` token is not accepted from these clients. The one exception is a client that rejects the prompt as an unknown method, so nothing was shown; it falls back to the token route.
+- **Other clients:** the agent retries with the token from the held result. The token is keyed with a per-process secret, so it can't be computed without a held result, and it only matches that exact content (including the target issue).
+
+Personal notes are read raw from disk at check time, so a note with broken frontmatter is still checked. The write fails, rather than going out unchecked, in two cases: a personal vault folder has gone missing (for example an unmounted drive), or a file or directory inside it exists but can't be read.
 
 Earlier revisions shipped a Dockerfile and Compose files declaring port 3001, left over from an abandoned HTTP prototype. Nothing ever bound that port. They were removed in v1.0.0 to prevent exactly the misreading this section forestalls.
 
@@ -116,6 +132,19 @@ Any process that can write to the vault directory can add, alter, or delete note
 ### Search scores are not comparable across vaults
 
 With multiple configured vaults, each has its own index and raw BM25 scores are merged without cross-corpus normalization. A correctness and ranking-quality caveat, not a security one; noted because it affects which notes an agent surfaces.
+
+### The station write check catches copies and links, not meaning
+
+The check is deterministic and exact. It does not catch:
+- personal information that is **paraphrased**
+- a verbatim overlap **shorter than 12 tokens** (a single name, figure or short fact)
+- an overlap broken up by headings, task items or blank lines, such as a loose list or a profile laid out as one heading per fact
+- markup used to split or disguise text: HTML tags or entities between words, `%`-encoded or backslash paths
+- homoglyphs (look-alike letters from another script)
+- Syncthing `.sync-conflict` copies, which are not read as sources
+- sensitive content that isn't in a personal note at all
+
+Pattern scanning (account numbers, amounts, a term list) and fuzzy overlap are not implemented. When the client can't show an elicitation prompt, the `approve_hold` route trusts the agent to ask the user first. The reverse also holds: overlap isn't judged for intent, so public text that a personal note also contains is held too. Treat the check as a guard against an agent pasting what it read, not as data-loss prevention.
 
 ### No authentication or authorization
 
