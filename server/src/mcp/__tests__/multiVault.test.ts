@@ -13,7 +13,7 @@ import os from 'os';
 import path from 'path';
 import { NoteStore } from '../../notes/NoteStore.js';
 import { SearchIndex } from '../../search/SearchIndex.js';
-import { createMcpServer, type VaultRuntime } from '../server.js';
+import { createMcpServer, type LocalVaultRuntime } from '../server.js';
 
 async function makeTmpDir(): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), 'library-mvault-test-'));
@@ -28,22 +28,22 @@ type AnyTool = { inputSchema: any; handler: (args: unknown, extra: unknown) => P
 describe('multi-vault tool routing', () => {
   let personalDir: string;
   let workDir: string;
-  let personal: VaultRuntime;
-  let work: VaultRuntime;
+  let personal: LocalVaultRuntime;
+  let work: LocalVaultRuntime;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let server: any;
 
-  async function makeRuntime(name: string, dir: string): Promise<VaultRuntime> {
+  async function makeRuntime(name: string, dir: string): Promise<LocalVaultRuntime> {
     const noteStore = new NoteStore(dir);
     const searchIndex = new SearchIndex();
     // Deliberately skip initialize(): these routing tests never rely on
     // watcher-driven rebuilds (the handlers rebuild indexes via direct fs reads),
     // and the temp dir already exists (mkdtemp). Starting a chokidar watcher per
     // vault here only leaks poll timers that race afterEach's dir removal.
-    return { name, notesDir: dir, contextFile: 'profile.md', noteStore, searchIndex };
+    return { type: 'local', name, notesDir: dir, contextFile: 'profile.md', noteStore, searchIndex };
   }
 
-  async function reindex(rt: VaultRuntime) {
+  async function reindex(rt: LocalVaultRuntime) {
     rt.searchIndex.buildIndexWithContent(await rt.noteStore.listWithContent());
   }
 
@@ -332,7 +332,7 @@ describe('multi-vault tool routing', () => {
     });
 
     test('a per-vault custom context_file is honored', async () => {
-      const customWork: VaultRuntime = { ...work, contextFile: 'conventions.md' };
+      const customWork: LocalVaultRuntime = { ...work, contextFile: 'conventions.md' };
       server = createMcpServer(
         { vaults: [personal, customWork], defaultVault: 'personal' },
         { version: '0.0.0-test', defaultExcludeTags: [] },

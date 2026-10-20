@@ -2,7 +2,14 @@ import fs from 'fs/promises';
 import path from 'path';
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { NoteStore, pickFrontmatterExtras } from '../notes/NoteStore.js';
+import {
+  StationApiError,
+  createStationClient,
+  type Note as StationNote,
+  type StationClient,
+} from 'dossier-station-api';
+import { NoteStore, composeFrontmatter, pickFrontmatterExtras } from '../notes/NoteStore.js';
+import { stringifyMatter } from '../notes/parseMatter.js';
 import { SearchIndex } from '../search/SearchIndex.js';
 import { coerceStringArray, resolveFrontmatterParams, FRONTMATTER_DENYLIST } from './coerce.js';
 import { extractTodos } from '../notes/todos.js';
@@ -10,16 +17,17 @@ import { filterByExcludedTags } from '../notes/tagFilter.js';
 import { appendToSection, editBody } from '../notes/sections.js';
 import { todayLocal } from '../notes/dates.js';
 import { applyFrontmatterEdit } from '../notes/frontmatter.js';
-import type { Note, NoteListItem, SearchResult } from '../types.js';
+import type { Note, NoteFrontmatter, NoteListItem, SearchResult, StationVaultConfig } from '../types.js';
 
 /**
- * The runtime counterpart to `VaultConfig`: a configured vault with its live
+ * The runtime counterpart to a local `VaultConfig`: a vault with its live
  * `NoteStore` (own chokidar watcher) and `SearchIndex`. The entry point builds
  * one per registry vault; the tool handlers route reads/writes across them by
  * name. Defined here rather than in `types.ts` to avoid a `types.ts` →
  * `NoteStore` → `types.ts` import cycle.
  */
-export interface VaultRuntime {
+export interface LocalVaultRuntime {
+  type: 'local';
   /** Slug-safe vault name (matches the config entry). */
   name: string;
   /** Absolute vault root — used to read the context file directly. */
@@ -28,6 +36,31 @@ export interface VaultRuntime {
   contextFile: string;
   noteStore: NoteStore;
   searchIndex: SearchIndex;
+}
+
+/** A dossier-station vault: every read and write is a call to the station's API. */
+export interface StationVaultRuntime {
+  type: 'station';
+  name: string;
+  /** Bootstrap doc filename; read as the note slug without `.md`. */
+  contextFile: string;
+  client: StationClient;
+}
+
+export type VaultRuntime = LocalVaultRuntime | StationVaultRuntime;
+
+/**
+ * Connect a configured station. A request that outlives `timeoutMs` is
+ * aborted, which the client reports as `unreachable`.
+ */
+export function createStationRuntime(config: StationVaultConfig): StationVaultRuntime {
+  const { timeoutMs } = config;
+  const client = createStationClient({
+    baseUrl: config.url,
+    apiKey: config.apiKey,
+    fetch: (input, init) => fetch(input, { ...init, signal: AbortSignal.timeout(timeoutMs) }),
+  });
+  return { type: 'station', name: config.name, contextFile: config.contextFile, client };
 }
 
 /** The live per-vault stores/indexes plus the default (write-narrow) vault name. */
@@ -64,13 +97,152 @@ type ToolResponse = {
 
 // The two response shapes every tool handler returns: `ok(text)` for success,
 // `err(text)` for a caller-facing error (isError: true). `slugValidationError`
-// and `withToolError` are specializations that route through `err`.
-function ok(text: string): ToolResponse {
-  return { content: [{ type: 'text', text }] };
+// and `withToolError` are specializations that route through `err`. Notices
+// (e.g. a station that couldn't be reached) follow the main text as separate
+// content items, so the first item keeps its usual shape.
+function ok(text: string, notices: string[] = []): ToolResponse {
+  return { content: [text, ...notices].map((t) => ({ type: 'text' as const, text: t })) };
 }
 
-function err(text: string): ToolResponse {
-  return { isError: true, content: [{ type: 'text', text }] };
+function err(text: string, notices: string[] = []): ToolResponse {
+  return { ...ok(text, notices), isError: true };
+}
+
+/** An error's message; a station error also names its code, unless the message already says it. */
+function errorMessage(e: unknown): string {
+  if (e instanceof StationApiError) return e.message.includes(e.code) ? e.message : `${e.code}: ${e.message}`;
+  return e instanceof Error ? e.message : String(e);
+}
+
+function stationUnavailable(v: StationVaultRuntime, e: unknown): string {
+  return `Station vault "${v.name}" unavailable (${errorMessage(e)}); results cover the other vaults only.`;
+}
+
+/**
+ * A station note in the server's `Note` shape. Typed fields are coerced the way
+ * the local read path does it; every other key — lists and objects included — is
+ * kept, so a write built from this note stores them back unchanged.
+ */
+function fromStationNote(n: StationNote): Note {
+  const note = { slug: n.slug, frontmatter: fromStationFrontmatter(n.frontmatter), content: n.body, raw: stringifyMatter(n.body, n.frontmatter) };
+  storedFrontmatter.set(note, n.frontmatter);
+  return note;
+}
+
+/** The frontmatter a station returned for a note, before the typed fields were filled in. */
+const storedFrontmatter = new WeakMap<Note, Record<string, unknown>>();
+
+/**
+ * Undo typed fields that `fromStationFrontmatter` filled in and the write left
+ * as filled, so editing a station note never adds a placeholder title, a date,
+ * or empty lists it didn't have, nor replaces a stored value it couldn't read
+ * (e.g. a scalar `tags`). Each field returns to its stored state: absent, or
+ * the stored value.
+ */
+function withoutFilledFields(
+  fm: NoteFrontmatter,
+  existing: Note,
+  stored: Record<string, unknown>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...fm };
+  const restore = (key: string) => {
+    if (key in stored) out[key] = stored[key];
+    else delete out[key];
+  };
+  const isTitle = typeof stored.title === 'string' && stored.title.length > 0;
+  if (!isTitle && fm.title === existing.frontmatter.title) restore('title');
+  if (typeof stored.date !== 'string') restore('date');
+  if (!Array.isArray(stored.tags) && fm.tags.length === 0) restore('tags');
+  if (!Array.isArray(stored.related) && fm.related.length === 0) restore('related');
+  return out;
+}
+
+function fromStationFrontmatter(fm: Record<string, unknown>): NoteFrontmatter {
+  return {
+    ...fm,
+    title: typeof fm.title === 'string' && fm.title.length > 0 ? fm.title : 'Untitled',
+    date: typeof fm.date === 'string' ? fm.date : '',
+    tags: Array.isArray(fm.tags) ? fm.tags.map(String) : [],
+    related: Array.isArray(fm.related) ? fm.related.map(String) : [],
+  };
+}
+
+/** Every note in one vault, newest first, for the resources. */
+async function listAll(v: VaultRuntime): Promise<NoteListItem[]> {
+  if (v.type === 'local') return v.noteStore.list();
+  const { notes } = await v.client.listNotes({ exclude_tags: [] });
+  return notes.map((n) => ({ slug: n.slug, frontmatter: fromStationFrontmatter(n.frontmatter) }));
+}
+
+/**
+ * Sort key for merged listings: `date`, else `created` (station issues carry
+ * only `created`, often with a time), cut to the calendar day so both compare alike.
+ */
+function listDate(fm: Record<string, unknown>): string {
+  const d = fm.date ?? fm.created;
+  return typeof d === 'string' ? d.slice(0, 10) : '';
+}
+
+/** Read one note from either backend; `null` when it doesn't exist. */
+async function readNote(v: VaultRuntime, slug: string): Promise<Note | null> {
+  if (v.type === 'local') return v.noteStore.get(slug);
+  try {
+    const { note } = await v.client.getNote({ slug });
+    return fromStationNote(note);
+  } catch (e) {
+    if (e instanceof StationApiError && e.code === 'not_found') return null;
+    throw e;
+  }
+}
+
+interface NoteWrite {
+  slug: string;
+  title: string;
+  content: string;
+  tags?: string[];
+  related?: string[];
+  frontmatter?: Record<string, unknown>;
+}
+
+/**
+ * Write one note to either backend, merging with `existing` the same way.
+ * A station write goes through its `write` verb; with `createOnly` the station
+ * refuses (`conflict`) when the note already exists.
+ */
+async function writeNote(
+  v: VaultRuntime,
+  data: NoteWrite,
+  existing: Note | null,
+  options: { createOnly?: boolean } = {},
+): Promise<Note> {
+  if (v.type === 'local') return v.noteStore.upsert(data);
+  const composed = composeFrontmatter(existing?.frontmatter, data, todayLocal());
+  const stored = existing ? storedFrontmatter.get(existing) : undefined;
+  const frontmatter = existing && stored ? withoutFilledFields(composed, existing, stored) : composed;
+  await v.client.write({
+    slug: data.slug,
+    body: data.content,
+    frontmatter,
+    ...(options.createOnly ? { create_only: true } : {}),
+  });
+  return {
+    slug: data.slug,
+    frontmatter: composed,
+    content: data.content,
+    raw: stringifyMatter(data.content, frontmatter),
+  };
+}
+
+/** The vault's bootstrap document as text. */
+async function readContext(v: VaultRuntime): Promise<string> {
+  if (v.type === 'local') {
+    const result = await vaultContextHandler(v.notesDir, v.contextFile);
+    return result.contents[0].text;
+  }
+  const slug = v.contextFile.replace(/\.md$/, '');
+  const note = await readNote(v, slug);
+  if (!note) throw new Error(`${v.contextFile} not found — create the note "${slug}" in station vault "${v.name}".`);
+  return note.raw;
 }
 
 export function slugValidationError(slug: string): ToolResponse {
@@ -140,8 +312,10 @@ export function createMcpServer(
 
   // Rebuild one vault's search index from its full note corpus. Called after
   // every write so subsequent searches in that vault see the change without
-  // waiting for the watcher tick. Scoped to the written vault only.
+  // waiting for the watcher tick. Scoped to the written vault only; a station
+  // indexes on its own side, so there is nothing to rebuild.
   async function rebuildIndex(v: VaultRuntime): Promise<void> {
+    if (v.type !== 'local') return;
     const allNotes = await v.noteStore.listWithContent();
     v.searchIndex.buildIndexWithContent(allNotes);
   }
@@ -166,9 +340,11 @@ export function createMcpServer(
     transform: (note: Note) => SurgicalWriteResult,
   ): Promise<ToolResponse> {
     if (!isValidSlug(slug)) return slugValidationError(slug);
+    const refused = refuseIssueWrite(v, slug);
+    if (refused) return refused;
     let written;
     try {
-      const note = await v.noteStore.get(slug);
+      const note = await readNote(v, slug);
       if (!note) {
         return err(`Note "${slug}" not found.`);
       }
@@ -177,18 +353,21 @@ export function createMcpServer(
         return err(result.message);
       }
       const updated = todayLocal();
-      written = await v.noteStore.upsert({
-        slug,
-        title: note.frontmatter.title,
-        content: result.content,
-        tags: result.tags,
-        related: result.related,
-        frontmatter: { ...result.frontmatter, updated },
-      });
+      written = await writeNote(
+        v,
+        {
+          slug,
+          title: note.frontmatter.title,
+          content: result.content,
+          tags: result.tags,
+          related: result.related,
+          frontmatter: { ...result.frontmatter, updated },
+        },
+        note,
+      );
       await rebuildIndex(v);
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      return err(`${failPrefix} "${slug}": ${msg}`);
+      return err(`${failPrefix} "${slug}": ${errorMessage(e)}`);
     }
     return ok(written.raw);
   }
@@ -197,9 +376,43 @@ export function createMcpServer(
     try {
       return await fn();
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      return err(`${prefix}: ${msg}`);
+      return err(`${prefix}: ${errorMessage(e)}`);
     }
+  }
+
+  // Run `fn` on each vault of a read. A local failure fails the call as before.
+  // A station failure fails it only when the caller named that vault; on a
+  // read-wide call the station is skipped and a notice says why.
+  async function readEach<T>(
+    vaults: VaultRuntime[],
+    explicit: boolean,
+    fn: (v: VaultRuntime) => Promise<T[]>,
+  ): Promise<{ items: T[]; notices: string[] }> {
+    const items: T[] = [];
+    const notices: string[] = [];
+    for (const v of vaults) {
+      if (v.type === 'station' && !explicit) {
+        try {
+          items.push(...(await fn(v)));
+        } catch (e) {
+          notices.push(stationUnavailable(v, e));
+        }
+      } else {
+        items.push(...(await fn(v)));
+      }
+    }
+    return { items, notices };
+  }
+
+  function stationUnsupported(tool: string, v: StationVaultRuntime, why: string): ToolResponse {
+    return err(`${tool} is not supported on station vault "${v.name}": ${why}`);
+  }
+
+  // The station's `write` verb takes docs only; notes under `issues/` change
+  // through its issue operations, so note tools refuse them before any call.
+  function refuseIssueWrite(v: VaultRuntime, slug: string): ToolResponse | null {
+    if (v.type !== 'station' || !slug.startsWith('issues/')) return null;
+    return err(`"${slug}" is an issue in station vault "${v.name}"; issues can't be written with note tools.`);
   }
 
   // ── Tools ──────────────────────────────────────────────────────────────────
@@ -219,8 +432,7 @@ export function createMcpServer(
       withToolError('Failed to load vault context', async () => {
         const v = resolveWriteVault(vault);
         if (isToolError(v)) return v;
-        const result = await vaultContextHandler(v.notesDir, v.contextFile);
-        return ok(result.contents[0].text);
+        return ok(await readContext(v));
       })
   );
 
@@ -240,17 +452,26 @@ export function createMcpServer(
         const vaults = resolveReadVaults(vault);
         if (isToolError(vaults)) return vaults;
         const normalized = prefix && (prefix.endsWith('/') ? prefix : prefix + '/');
-        const tagged: Array<NoteListItem & { vault: string }> = [];
-        for (const v of vaults) {
+        const excludeTags = exclude_tags ?? defaultExcludeTags;
+        type Item = { slug: string; frontmatter: Record<string, unknown>; vault: string };
+        // A station filters by prefix and tags on its side; local notes are
+        // filtered here.
+        const { items, notices } = await readEach<Item>(vaults, vault !== undefined, async (v) => {
+          if (v.type === 'station') {
+            const { notes } = await v.client.listNotes({
+              ...(normalized ? { path: normalized } : {}),
+              exclude_tags: excludeTags,
+            });
+            return notes.map((n) => ({ ...n, vault: v.name }));
+          }
           const notes = await v.noteStore.list();
-          for (const n of notes) tagged.push({ ...n, vault: v.name });
-        }
-        const filtered = normalized ? tagged.filter((n) => n.slug.startsWith(normalized)) : tagged;
-        const excluded = filterByExcludedTags(filtered, exclude_tags ?? defaultExcludeTags);
+          const filtered = normalized ? notes.filter((n) => n.slug.startsWith(normalized)) : notes;
+          return filterByExcludedTags(filtered, excludeTags).map((n) => ({ ...n, vault: v.name }));
+        });
         // Concat + sort by date desc across vaults (matches single-vault order:
         // same comparator NoteStore.list() uses, and Array.sort is stable).
-        excluded.sort((a, b) => b.frontmatter.date.localeCompare(a.frontmatter.date));
-        return ok(JSON.stringify(excluded, null, 2));
+        items.sort((a, b) => listDate(b.frontmatter).localeCompare(listDate(a.frontmatter)));
+        return ok(JSON.stringify(items, null, 2), notices);
       })
   );
 
@@ -271,7 +492,7 @@ export function createMcpServer(
         const v = vaultsByName.get(vault);
         if (!v) return unknownVaultError(vault);
         return withToolError(`Failed to read note "${slug}"`, async () => {
-          const note = await v.noteStore.get(slug);
+          const note = await readNote(v, slug);
           if (!note) {
             return err(`Note "${slug}" not found in vault "${vault}".`);
           }
@@ -280,21 +501,22 @@ export function createMcpServer(
       }
       // Omitted vault → resolve default-first across all vaults. Raw is returned
       // unchanged (round-trips into update_note); a cross-vault slug collision
-      // errors so the caller passes `vault` explicitly.
+      // errors so the caller passes `vault` explicitly. A station that can't be
+      // reached is skipped with a notice, so a hit elsewhere can't be checked
+      // against it for a collision.
       return withToolError(`Failed to read note "${slug}"`, async () => {
-        const hits: Array<{ vault: string; note: Note }> = [];
-        for (const v of orderedVaults) {
-          const note = await v.noteStore.get(slug);
-          if (note) hits.push({ vault: v.name, note });
-        }
+        const { items: hits, notices } = await readEach(orderedVaults, false, async (v) => {
+          const note = await readNote(v, slug);
+          return note ? [{ vault: v.name, note }] : [];
+        });
         if (hits.length === 0) {
-          return err(`Note "${slug}" not found.`);
+          return err(`Note "${slug}" not found.`, notices);
         }
         if (hits.length > 1) {
           const names = hits.map((h) => `"${h.vault}"`).join(', ');
           return err(`Note "${slug}" exists in multiple vaults: ${names}. Pass vault to disambiguate.`);
         }
-        return ok(hits[0].note.raw);
+        return ok(hits[0].note.raw, notices);
       });
     }
   );
@@ -320,6 +542,8 @@ export function createMcpServer(
       if (isToolError(wv)) return wv;
       const slug = notePath ?? ('inbox/' + NoteStore.makeSlug(title));
       if (!isValidSlug(slug)) return slugValidationError(slug);
+      const refused = refuseIssueWrite(wv, slug);
+      if (refused) return refused;
 
       // Denylist check on the explicit frontmatter param (first-fail, named key).
       if (frontmatter) {
@@ -330,17 +554,18 @@ export function createMcpServer(
         }
       }
 
+      const exists = err(`Note already exists at "${slug}" — use update_note to modify it.`);
       let note;
       try {
-        const existing = await wv.noteStore.get(slug);
-        if (existing) {
-          return err(`Note already exists at "${slug}" — use update_note to modify it.`);
+        // A station checks for an existing note itself, atomically with the write.
+        if (wv.type === 'local' && (await wv.noteStore.get(slug))) {
+          return exists;
         }
-        note = await wv.noteStore.upsert({ slug, title, content, tags, related, frontmatter });
+        note = await writeNote(wv, { slug, title, content, tags, related, frontmatter }, null, { createOnly: true });
         await rebuildIndex(wv);
       } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        return err(`Failed to write note "${slug}": ${msg}`);
+        if (e instanceof StationApiError && e.code === 'conflict') return exists;
+        return err(`Failed to write note "${slug}": ${errorMessage(e)}`);
       }
       return ok(`Created note "${note.frontmatter.title}" with slug "${note.slug}".`);
     }
@@ -370,9 +595,11 @@ export function createMcpServer(
       const wv = resolveWriteVault(vault);
       if (isToolError(wv)) return wv;
       if (!isValidSlug(slug)) return slugValidationError(slug);
+      const refused = refuseIssueWrite(wv, slug);
+      if (refused) return refused;
       let note;
       try {
-        const existing = await wv.noteStore.get(slug);
+        const existing = await readNote(wv, slug);
         if (!existing) {
           return err(`Note "${slug}" not found.`);
         }
@@ -380,18 +607,21 @@ export function createMcpServer(
         if (!resolved.ok) {
           return err(resolved.error);
         }
-        note = await wv.noteStore.upsert({
-          slug,
-          title: resolved.title,
-          content: resolved.content,
-          tags: resolved.tags,
-          related: resolved.related,
-          frontmatter: resolved.frontmatter,
-        });
+        note = await writeNote(
+          wv,
+          {
+            slug,
+            title: resolved.title,
+            content: resolved.content,
+            tags: resolved.tags,
+            related: resolved.related,
+            frontmatter: resolved.frontmatter,
+          },
+          existing,
+        );
         await rebuildIndex(wv);
       } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        return err(`Failed to write note "${slug}": ${msg}`);
+        return err(`Failed to write note "${slug}": ${errorMessage(e)}`);
       }
       return ok(`Updated note "${note.frontmatter.title}" (slug: "${note.slug}").`);
     }
@@ -544,7 +774,7 @@ export function createMcpServer(
 
   server.tool(
     'delete_note',
-    'Delete a note from the knowledge base by its slug. Targets the default vault unless `vault` is given.',
+    'Delete a note from the knowledge base by its slug. Targets the default vault unless `vault` is given. Not supported on station vaults.',
     {
       slug: z.string().describe('The slug of the note to delete'),
       vault: writeVaultParam,
@@ -552,6 +782,7 @@ export function createMcpServer(
     async ({ slug, vault }) => {
       const wv = resolveWriteVault(vault);
       if (isToolError(wv)) return wv;
+      if (wv.type === 'station') return stationUnsupported('delete_note', wv, 'the station has no delete operation.');
       if (!isValidSlug(slug)) return slugValidationError(slug);
       const result = await withToolError(`Failed to delete note "${slug}"`, async () => {
         const deleted = await wv.noteStore.delete(slug);
@@ -579,6 +810,7 @@ export function createMcpServer(
     'search_notes',
     'Search the knowledge base using keyword search. Returns matching notes scored by relevance, with excerpts. '
     + 'By default spans all configured vaults, merging results by score; each result carries a `vault` field naming its source vault. '
+    + 'If a station vault can\'t be reached, the other vaults still answer and a notice follows the results. '
     + 'Notes tagged with the vault\'s default-excluded tags (e.g. archived, historical) are omitted by default; pass exclude_tags: [] to include them, or a custom list to override the default.',
     {
       query: z.string().describe('Search query — keywords to search for'),
@@ -603,17 +835,23 @@ export function createMcpServer(
         // the single-user / few-vaults scale; no cross-corpus score normalization
         // ships in v1. Asking each index for `cap` (not a per-vault fraction)
         // keeps the merge exact for the top `cap` — no vault is under-sampled.
-        const merged: Array<SearchResult & { vault: string }> = [];
-        for (const v of vaults) {
-          const results = v.searchIndex.search(query, cap, exclude_tags ?? defaultExcludeTags);
-          for (const r of results) merged.push({ ...r, vault: v.name });
-        }
+        const excludeTags = exclude_tags ?? defaultExcludeTags;
+        type Hit = Omit<SearchResult, 'frontmatter'> & { frontmatter: Record<string, unknown>; vault: string };
+        const { items: merged, notices } = await readEach<Hit>(vaults, vault !== undefined, async (v) => {
+          if (v.type === 'station') {
+            // The station requires a non-empty query; an empty one matches nothing anyway.
+            if (query.length === 0) return [];
+            const { results } = await v.client.searchNotes({ query, limit: cap, exclude_tags: excludeTags });
+            return results.map((r) => ({ ...r, vault: v.name }));
+          }
+          return v.searchIndex.search(query, cap, excludeTags).map((r) => ({ ...r, vault: v.name }));
+        });
         merged.sort((a, b) => b.score - a.score);
         const limited = merged.slice(0, cap);
         if (limited.length === 0) {
-          return ok(`No notes found matching "${query}".`);
+          return ok(`No notes found matching "${query}".`, notices);
         }
-        return ok(JSON.stringify(limited, null, 2));
+        return ok(JSON.stringify(limited, null, 2), notices);
       })
   );
 
@@ -622,7 +860,7 @@ export function createMcpServer(
     'List notes that contain incomplete `- [ ]` markdown checkboxes, with each todo\'s text excerpted. ' +
     'Filter by slug prefix to scope to a folder. ' +
     'Useful for finding open work across the vault. Note: checkbox syntax inside fenced code blocks is ignored. '
-    + 'By default spans all configured vaults; each result carries a `vault` field naming its source vault. '
+    + 'By default spans all configured local vaults (station vaults are not scanned); each result carries a `vault` field naming its source vault. '
     + 'Notes tagged with the vault\'s default-excluded tags (e.g. archived, historical) are omitted by default; pass exclude_tags: [] to include them, or a custom list to override the default.',
     {
       path: z.string().optional().describe('Optional slug prefix to filter by (e.g. "projects/startup"). Trailing slash is normalized automatically.'),
@@ -634,9 +872,18 @@ export function createMcpServer(
       withToolError('Failed to list todos', async () => {
         const vaults = resolveReadVaults(vault);
         if (isToolError(vaults)) return vaults;
+        // Scanning a station would mean fetching every note body, so stations
+        // are left out: refused when named, skipped with a notice otherwise.
+        const notices: string[] = [];
+        const locals: LocalVaultRuntime[] = [];
+        for (const v of vaults) {
+          if (v.type === 'local') locals.push(v);
+          else if (vault !== undefined) return stationUnsupported('list_todos', v, 'station notes are not scanned for todos.');
+          else notices.push(`Station vault "${v.name}" is not scanned for todos.`);
+        }
         const normalized = prefix && (prefix.endsWith('/') ? prefix : prefix + '/');
         const gathered: Array<NoteListItem & { content: string; vault: string }> = [];
-        for (const v of vaults) {
+        for (const v of locals) {
           const notes = await v.noteStore.listWithContent();
           for (const n of notes) gathered.push({ ...n, vault: v.name });
         }
@@ -657,9 +904,9 @@ export function createMcpServer(
           .slice(0, limit ?? 10);
 
         if (withTodos.length === 0) {
-          return ok('No notes found with incomplete TODOs.');
+          return ok('No notes found with incomplete TODOs.', notices);
         }
-        return ok(JSON.stringify(withTodos, null, 2));
+        return ok(JSON.stringify(withTodos, null, 2), notices);
       })
   );
 
@@ -669,7 +916,7 @@ export function createMcpServer(
     'References to the old slug in other notes are rewritten — both `related` entries and inline wiki-links ' +
     '([[old]], [[old|alias]], [[old#heading]]). ' +
     'Fails if a note already exists at the target slug — delete it first if you intend to replace. ' +
-    'Operates on the default vault unless `vault` is given; moves never cross vaults.',
+    'Operates on the default vault unless `vault` is given; moves never cross vaults. Not supported on station vaults.',
     {
       slug: z.string().describe('The current slug of the note to move'),
       new_slug: z.string().describe('The target slug to move the note to'),
@@ -678,6 +925,7 @@ export function createMcpServer(
     async ({ slug, new_slug, vault }) => {
       const wv = resolveWriteVault(vault);
       if (isToolError(wv)) return wv;
+      if (wv.type === 'station') return stationUnsupported('move_note', wv, 'the station has no move operation.');
       if (!isValidSlug(slug)) return slugValidationError(slug);
       if (!isValidSlug(new_slug)) return slugValidationError(new_slug);
       if (slug === new_slug) {
@@ -706,6 +954,46 @@ export function createMcpServer(
     }
   );
 
+  server.tool(
+    'note_history',
+    'Show the commit history of a note in a dossier-station vault, newest first: commit, date, author, message, and any issue status change. '
+    + 'Only station vaults keep history. Omit `vault` when exactly one station vault is configured.',
+    {
+      slug: z.string().describe('The note slug (e.g. "projects/app-search" or "issues/STN-142")'),
+      vault: z.string().optional().describe(
+        'Optional station vault name. Omit to use the only configured station vault.'
+      ),
+      limit: z.number().int().min(1).max(100).optional().describe('Maximum number of entries to return (default: all)'),
+    },
+    async ({ slug, vault, limit }) => {
+      if (!isValidSlug(slug)) return slugValidationError(slug);
+      let v: VaultRuntime;
+      if (vault !== undefined) {
+        const named = vaultsByName.get(vault);
+        if (!named) return unknownVaultError(vault);
+        v = named;
+      } else {
+        const stations = registry.vaults.filter((r) => r.type === 'station');
+        if (stations.length !== 1) {
+          return err(
+            stations.length === 0
+              ? 'No station vault is configured; note history is only kept by station vaults.'
+              : `More than one station vault is configured (${stations.map((s) => `"${s.name}"`).join(', ')}). Pass vault to choose one.`,
+          );
+        }
+        v = stations[0];
+      }
+      if (v.type !== 'station') {
+        return err(`Vault "${v.name}" is a local vault; note history is only kept by station vaults.`);
+      }
+      const station = v;
+      return withToolError(`Failed to read history of note "${slug}"`, async () => {
+        const { entries } = await station.client.history({ slug, ...(limit !== undefined ? { limit } : {}) });
+        return ok(JSON.stringify(entries, null, 2));
+      });
+    }
+  );
+
   // ── Resources ──────────────────────────────────────────────────────────────
   //
   // MCP resources have no param surface, so they stay bound to the default
@@ -719,10 +1007,9 @@ export function createMcpServer(
     async () => {
       let notes;
       try {
-        notes = await defaultRuntime.noteStore.list();
+        notes = await listAll(defaultRuntime);
       } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        throw new Error(`Failed to list notes: ${msg}`);
+        throw new Error(`Failed to list notes: ${errorMessage(e)}`);
       }
       const lines = notes.map(
         (n) => `- [${n.frontmatter.title}](note://${encodeURIComponent(n.slug)}) — ${n.frontmatter.date} [${n.frontmatter.tags.join(', ')}]`
@@ -743,7 +1030,7 @@ export function createMcpServer(
     'vault-context',
     'vault://context',
     { description: 'Vault bootstrap document (profile.md). Read this first to orient yourself to the vault — its structure, contents, and how to navigate it.' },
-    () => vaultContextHandler(defaultRuntime.notesDir, defaultRuntime.contextFile)
+    async () => ({ contents: [{ uri: 'vault://context', text: await readContext(defaultRuntime), mimeType: 'text/markdown' }] })
   );
 
   // Individual note resources via template (default vault)
@@ -751,9 +1038,9 @@ export function createMcpServer(
     list: async () => {
       let notes;
       try {
-        notes = await defaultRuntime.noteStore.list();
+        notes = await listAll(defaultRuntime);
       } catch (e) {
-        console.error('[dossier-mcp] Failed to list note resources:', e instanceof Error ? e.message : e);
+        console.error('[dossier-mcp] Failed to list note resources:', errorMessage(e));
         return { resources: [] };
       }
       return {
@@ -778,10 +1065,9 @@ export function createMcpServer(
       }
       let note;
       try {
-        note = await defaultRuntime.noteStore.get(decodedSlug);
+        note = await readNote(defaultRuntime, decodedSlug);
       } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        throw new Error(`Failed to read note "${decodedSlug}": ${msg}`);
+        throw new Error(`Failed to read note "${decodedSlug}": ${errorMessage(e)}`);
       }
       if (!note) {
         throw new Error(`Note "${decodedSlug}" not found`);

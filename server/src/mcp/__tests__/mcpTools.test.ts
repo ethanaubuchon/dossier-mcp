@@ -36,7 +36,7 @@ function singleVaultServer(
 ) {
   return createMcpServer(
     {
-      vaults: [{ name: 'default', notesDir: dir, contextFile: opts.contextFile ?? 'profile.md', noteStore, searchIndex }],
+      vaults: [{ type: 'local', name: 'default', notesDir: dir, contextFile: opts.contextFile ?? 'profile.md', noteStore, searchIndex }],
       defaultVault: 'default',
     },
     { version: '0.0.0-test', defaultExcludeTags: opts.defaultExcludeTags },

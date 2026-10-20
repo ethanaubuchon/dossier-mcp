@@ -217,23 +217,9 @@ export class NoteStore extends EventEmitter {
     const slug = data.slug || NoteStore.makeSlug(data.title);
     const date = todayLocal();
 
-    // Merge with existing note if it exists. Layer order:
-    //   1. Existing non-typed extras (so keys absent from this call survive).
-    //      Already normalized via parseFrontmatter on the read path.
-    //   2. Caller's `frontmatter` param, normalized here to drop arrays/objects
-    //      and coerce Date values consistent with the read path.
-    //   3. Typed fields override (title/date/tags/related).
+    // Merge with the existing note, if any (layer order: composeFrontmatter).
     const existing = await this.get(slug);
-    const existingExtras = pickFrontmatterExtras(existing?.frontmatter);
-    const callerExtras = data.frontmatter ? normalizeFrontmatterExtras(data.frontmatter) : {};
-    const frontmatter: NoteFrontmatter = {
-      ...existingExtras,
-      ...callerExtras,
-      title: data.title,
-      date: existing?.frontmatter.date || date,
-      tags: data.tags ?? existing?.frontmatter.tags ?? [],
-      related: data.related ?? existing?.frontmatter.related ?? [],
-    };
+    const frontmatter = composeFrontmatter(existing?.frontmatter, data, date);
 
     const notePath = this.notePath(slug);
     await fs.mkdir(path.dirname(notePath), { recursive: true });
@@ -479,6 +465,30 @@ export class NoteStore extends EventEmitter {
       related: Array.isArray(data.related) ? data.related.map(String) : [],
     };
   }
+}
+
+/**
+ * The frontmatter a write stores, merged in layers:
+ *   1. The existing note's non-typed extras, so keys absent from this call survive.
+ *   2. The caller's `frontmatter` param, normalized to the flat-extras contract.
+ *   3. Typed fields: title from the call; date kept from the existing note (or
+ *      `today`); tags/related from the call, else kept.
+ * Existing extras pass through as given — the local read path has already
+ * flattened them, while a station note keeps its lists and objects.
+ */
+export function composeFrontmatter(
+  existing: NoteFrontmatter | undefined,
+  data: { title: string; tags?: string[]; related?: string[]; frontmatter?: Record<string, unknown> },
+  today: string,
+): NoteFrontmatter {
+  return {
+    ...pickFrontmatterExtras(existing),
+    ...(data.frontmatter ? normalizeFrontmatterExtras(data.frontmatter) : {}),
+    title: data.title,
+    date: existing?.date || today,
+    tags: data.tags ?? existing?.tags ?? [],
+    related: data.related ?? existing?.related ?? [],
+  };
 }
 
 // Returns frontmatter without the typed fields. Used by upsert to layer

@@ -11,8 +11,16 @@ Detailed behavior of every MCP tool and resource the server registers (`server/s
   - **Write tools** (`create_note`, `update_note`, `append_to_section`, `edit_note`, `edit_frontmatter`, `move_note`, `delete_note`): omitting `vault` targets the **default vault**.
   - `get_note` resolves across all vaults (see below); `get_vault_context` reads the default vault's context file.
 - **Default tag exclusion.** `list_notes`, `search_notes`, and `list_todos` omit notes carrying any tag in the default-exclude set (`archived`, `historical` unless configured otherwise). Matching is case-insensitive and is a hard filter, not a de-rank. Per call, `exclude_tags: []` disables exclusion and a non-empty list replaces the default set. `get_note` and the resources ignore exclusion — it is a discovery default, not an access control.
-- **Index freshness.** Every successful write rebuilds the search index of the vault it wrote to before returning, so a following `search_notes` sees the change. External edits (an editor, file sync) are picked up by the per-vault file watcher.
+- **Index freshness.** Every successful write to a local vault rebuilds the search index of the vault it wrote to before returning, so a following `search_notes` sees the change. External edits (an editor, file sync) are picked up by the per-vault file watcher.
 - **`updated` stamping.** The surgical write tools (`append_to_section`, `edit_note`, `edit_frontmatter`) set `updated: YYYY-MM-DD` in the host's local time zone. `create_note` sets `date` the same way; `update_note` preserves the original `date`.
+- **Station vaults.** A vault of `type: station` is a dossier-station instance reached over HTTP (see [Multi-vault configuration](../README.md#multi-vault-configuration)):
+  - **Reads** (`list_notes`, `search_notes`, `get_note`) include it like any vault. The prefix and effective `exclude_tags` set are sent to the station, which filters on its side. `get_note` rebuilds the note's raw Markdown from the station's frontmatter and body, so the result round-trips into `update_note`. Station issues have `created` instead of `date`; `list_notes` sorts them by `created`.
+  - **Degraded reads.** When `vault` is omitted and a station fails (unreachable, timed out, or an error response), the call still answers from the other vaults and appends a second text item: `Station vault "<name>" unavailable (<code>: <message>); results cover the other vaults only.` The first item keeps its usual shape. For `get_note`, a hit elsewhere can't be checked against the station for a collision. Naming the station in `vault` turns the failure into a normal error.
+  - **Writes** (`create_note`, `update_note`, `append_to_section`, `edit_note`, `edit_frontmatter`) read the note from the station, apply the same change and frontmatter merge as a local write, and store the result with the station's `write` verb. `create_note` asks the station to refuse an existing slug. Frontmatter lists and objects already on a station note are kept on write, though, as for local notes, new list or object values can't be set through these tools. Editing an existing station note never adds a `title`, `date`, `tags`, or `related` it didn't have, unless the edit sets them.
+  - **Edits are read-then-write.** The `write` verb replaces the stored note and carries no revision check, so two clients editing the same station note at once can lose one edit.
+  - **Issues are not notes here.** The station's `write` verb takes docs only, so on a station the write tools refuse any `issues/…` slug before calling it. Issues are still readable through the read tools.
+  - **Refused:** `delete_note` and `move_note` (the station has no such operation). `list_todos` skips stations with a notice (`Station vault "<name>" is not scanned for todos.`) and errors when one is named.
+  - `get_vault_context` on a station returns the raw Markdown (frontmatter + body) of the note named by `context_file` without `.md` (default `profile`), as a local vault returns its raw context file. Station errors carry their code, e.g. `Failed to write note "x": conflict: …`.
 - **Array coercion.** `tags`, `related`, and the `add_*`/`remove_*` list params accept a real array, a JSON-encoded array string, or a comma-separated string. On `create_note`/`update_note`, an empty list (`[]` or `"[]"`) means "keep the existing value", not "clear" — this protects the common get → modify → update round trip where clients send `tags: []` to mean "unchanged". To remove tags or related entries, use `edit_frontmatter`.
 
 ## Read tools
@@ -154,9 +162,21 @@ Moves the note with its content and metadata intact, then rewrites references to
 
 Permanently unlinks the file — there is no trash — and removes any directories left empty up to the vault root.
 
+## History
+
+### `note_history`
+
+| Param | Type | Notes |
+|---|---|---|
+| `slug` | string | |
+| `vault` | string? | A station vault. Omit when exactly one station is configured. |
+| `limit` | number? | 1–100; omit for the full history. |
+
+Returns the station's commit history for the note as a JSON array of `{ commit, date, author, message, status_change? }`, newest first; `status_change` (`{ from, to }`, `from` null on creation) appears on issue status transitions. Only stations keep history: a local vault errors, and with `vault` omitted the call errors unless exactly one station is configured.
+
 ## Resources
 
-Resources have no parameters, so all three are bound to the **default vault**.
+Resources have no parameters, so all three are bound to the **default vault** (a station, if that is the default).
 
 | URI | Content |
 |---|---|
