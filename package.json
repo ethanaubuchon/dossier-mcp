@@ -1,6 +1,6 @@
 {
   "name": "dossier-mcp",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "packageManager": "pnpm@11.9.0",
   "scripts": {
