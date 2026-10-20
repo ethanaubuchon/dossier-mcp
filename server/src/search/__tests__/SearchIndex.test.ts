@@ -381,4 +381,16 @@ describe('SearchIndex', () => {
       expect(index.search('common', 10, [])).toHaveLength(1);
     });
   });
+
+  describe('include predicate', () => {
+    test('limits results to accepted slugs, before the limit slice', () => {
+      index.buildIndex([
+        ...Array.from({ length: 3 }, (_, i) => makeNote(`docs/d${i}`, 'Common Note')),
+        ...Array.from({ length: 3 }, (_, i) => makeNote(`issues/i${i}`, 'Common Note')),
+      ]);
+      const results = index.search('common', 2, [], (slug) => slug.startsWith('issues/'));
+      expect(results).toHaveLength(2);
+      expect(results.every((r) => r.slug.startsWith('issues/'))).toBe(true);
+    });
+  });
 });

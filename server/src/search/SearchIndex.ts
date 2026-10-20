@@ -69,7 +69,13 @@ export class SearchIndex {
     this.computeCorpusStats();
   }
 
-  search(query: string, limit = 10, excludeTags: string[] = []): SearchResult[] {
+  /** `include`, when given, limits the search to notes whose slug it accepts. */
+  search(
+    query: string,
+    limit = 10,
+    excludeTags: string[] = [],
+    include?: (slug: string) => boolean,
+  ): SearchResult[] {
     const queryTerms = this.tokenizeQuery(query);
     if (queryTerms.length === 0) return [];
 
@@ -91,6 +97,7 @@ export class SearchIndex {
 
     for (const entry of this.entries) {
       if (isExcluded(entry.frontmatter.tags)) continue;
+      if (include && !include(entry.slug)) continue;
       let score = 0;
       for (const term of queryTerms) {
         const tf = this.getTermFrequency(entry, term);

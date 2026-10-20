@@ -115,7 +115,7 @@ Rules, all checked at startup (an invalid config stops the server with a named e
 - Shared vaults — `sync: git-publication` vaults and stations — cannot be the default vault while a personal (local, non-shared) vault is configured, so writes that don't name a vault never land in shared content. A config made only of shared vaults, such as a single station, may use any of them as the default.
 - A station needs `url` and `api_key_env`, and the named env var must be set. It takes no `path` or `sync`.
 
-A station takes part in reads like any other vault. When it can't be reached (or answers with an error) during a read that spans all vaults, the tool still returns the other vaults' results and adds a notice naming the station and the error; a read that names the station errors instead. Note writes go through the station's `write` verb, and `note_history` shows a station note's commit history. `delete_note` and `move_note` are refused on a station, as are note writes to its `issues/` notes, and `list_todos` skips stations.
+A station takes part in reads like any other vault. When it can't be reached (or answers with an error) during a read that spans all vaults, the tool still returns the other vaults' results and adds a notice naming the station and the error; a read that names the station errors instead. Note writes go through the station's `write` verb, and `note_history` shows a station note's commit history. `delete_note` and `move_note` are refused on a station, as are note writes to its `issues/` notes, and `list_todos` skips stations. Issues have their own tools (`create_issue`, `update_issue`, `comment_issue`, `query_issues`); `create_issue` runs the station's duplicate check and returns likely matches instead of filing when it finds them.
 
 Every tool takes an optional `vault` param. Read tools (`list_notes`, `search_notes`, `list_todos`) span all vaults when it is omitted and tag each result with its source vault; `get_note` searches all vaults and errors if the slug exists in more than one. Write tools target the default vault unless `vault` is given. Resources always read the default vault. See [docs/TOOLS.md](docs/TOOLS.md) for details.
 
@@ -164,7 +164,7 @@ Every tool also accepts an optional `vault` param (see [Multi-vault configuratio
 | `get_vault_context` | Read the vault's bootstrap document (`profile.md`); read this first |
 | `list_notes` | List notes; optional `path` prefix filter (e.g. `projects/startup`) |
 | `get_note` | Fetch a note by slug |
-| `search_notes` | Full-text keyword search |
+| `search_notes` | Full-text keyword search; optional `type` (`issue` / `doc`) filter |
 | `list_todos` | List notes with open `- [ ]` checkboxes; optional `path` prefix filter |
 | `create_note` | Create a note; `path` sets slug; defaults to `inbox/<title-slug>` |
 | `update_note` | Overwrite an existing note by slug (regenerates the whole body) |
@@ -174,6 +174,10 @@ Every tool also accepts an optional `vault` param (see [Multi-vault configuratio
 | `move_note` | Move/rename a note to a new slug; updates `related` references and inline `[[wiki-links]]` in other notes |
 | `delete_note` | Delete a note by slug |
 | `note_history` | Commit history of a note in a station vault |
+| `create_issue` | File an issue in a station vault, with a duplicate check (`confirm_new` to override) |
+| `update_issue` | Change an issue's status or fields |
+| `comment_issue` | Comment on an issue |
+| `query_issues` | Find issues by status, project, repo, label, or staleness |
 
 ## Resources exposed to Claude
 

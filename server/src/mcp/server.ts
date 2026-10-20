@@ -3,8 +3,14 @@ import path from 'path';
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import {
+  ISSUE_STATUSES,
+  IssueIdSchema,
+  ResolutionSchema,
   StationApiError,
   createStationClient,
+  type Issue,
+  type IssueFieldsUpdate,
+  type NoteKind,
   type Note as StationNote,
   type StationClient,
 } from 'dossier-station-api';
@@ -245,6 +251,63 @@ async function readContext(v: VaultRuntime): Promise<string> {
   return note.raw;
 }
 
+/** The station's split of notes: a slug under `issues/` is an issue, anything else a doc. */
+function noteKind(slug: string): NoteKind {
+  return slug.startsWith('issues/') ? 'issue' : 'doc';
+}
+
+/** An issue as Markdown with frontmatter, the shape `get_note` returns. */
+function issueMarkdown(issue: Issue): string {
+  return stringifyMatter(issue.body, issue.frontmatter);
+}
+
+/** `obj` without its `undefined` values, so optional params stay off the wire. */
+function defined<T extends Record<string, unknown>>(obj: T): Partial<T> {
+  return Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined)) as Partial<T>;
+}
+
+/** `update_issue` param → `IssueFieldsUpdate` key. */
+const ISSUE_UPDATE_FIELDS = {
+  title: 'title',
+  status: 'status',
+  project: 'project',
+  repos: 'repos',
+  labels: 'labels',
+  blocked_by: 'blocked-by',
+  found_during: 'found-during',
+  owner: 'owner',
+  last_reviewed: 'last-reviewed',
+  resolution: 'resolution',
+  duplicate_of: 'duplicate-of',
+  prs: 'prs',
+} as const satisfies Record<string, keyof IssueFieldsUpdate>;
+
+// Fails to compile when IssueFieldsUpdate gains a field the map above doesn't reach.
+type UnmappedIssueField = Exclude<keyof IssueFieldsUpdate, (typeof ISSUE_UPDATE_FIELDS)[keyof typeof ISSUE_UPDATE_FIELDS]>;
+const allIssueFieldsMapped: [UnmappedIssueField] extends [never] ? true : never = true;
+void allIssueFieldsMapped;
+
+/** `update_issue`'s field params, keyed exactly like ISSUE_UPDATE_FIELDS (a missing or extra key fails to compile). */
+const ISSUE_UPDATE_PARAMS = {
+  title: z.string().min(1).optional().describe('New title'),
+  status: z.enum(ISSUE_STATUSES).optional().describe('New status'),
+  project: z.string().nullable().optional().describe('Project slug; null removes the issue from its project'),
+  repos: z.array(z.string().min(1)).optional().describe('Replacement repo list'),
+  labels: z.array(z.string().min(1)).optional().describe('Replacement label list'),
+  blocked_by: z.array(z.string()).optional().describe('Replacement list of blocking issue IDs'),
+  found_during: z.string().min(1).nullable().optional().describe('Issue ID or PR URL the issue came out of; null clears it'),
+  owner: z.string().min(1).nullable().optional().describe('Owner; null clears it'),
+  last_reviewed: z.string().nullable().optional().describe('Date last reviewed, YYYY-MM-DD; null clears it'),
+  resolution: ResolutionSchema.nullable().optional().describe('Why a canceled issue was closed; null clears it'),
+  duplicate_of: z.string().nullable().optional().describe('ID of the issue this duplicates; null clears it'),
+  prs: z.array(z.string().min(1)).optional().describe('Replacement list of PR URLs addressing the issue'),
+} satisfies Record<keyof typeof ISSUE_UPDATE_FIELDS, z.ZodType>;
+
+function invalidIssueId(id: string): ToolResponse | null {
+  if (IssueIdSchema.safeParse(id).success) return null;
+  return err(`Invalid issue id "${id}": expected an uppercase prefix, a hyphen and a number, e.g. "STN-142".`);
+}
+
 export function slugValidationError(slug: string): ToolResponse {
   return err(`Invalid slug "${slug}": must be a non-empty relative path without "..", null bytes, or leading/trailing "/"`);
 }
@@ -411,8 +474,60 @@ export function createMcpServer(
   // The station's `write` verb takes docs only; notes under `issues/` change
   // through its issue operations, so note tools refuse them before any call.
   function refuseIssueWrite(v: VaultRuntime, slug: string): ToolResponse | null {
-    if (v.type !== 'station' || !slug.startsWith('issues/')) return null;
-    return err(`"${slug}" is an issue in station vault "${v.name}"; issues can't be written with note tools.`);
+    if (v.type !== 'station' || noteKind(slug) !== 'issue') return null;
+    return err(
+      `"${slug}" is an issue in station vault "${v.name}"; issues can't be written with note tools. `
+      + 'Use update_issue or comment_issue.',
+    );
+  }
+
+  // Station-only tools: omitted `vault` uses the only configured station; a
+  // named vault must be a station. `why` completes "... only <why>".
+  function resolveStationVault(vault: string | undefined, why: string): StationVaultRuntime | ToolResponse {
+    if (vault !== undefined) {
+      const v = vaultsByName.get(vault);
+      if (!v) return unknownVaultError(vault);
+      if (v.type !== 'station') return err(`Vault "${v.name}" is a local vault; ${why} station vaults.`);
+      return v;
+    }
+    const stations = registry.vaults.filter((r): r is StationVaultRuntime => r.type === 'station');
+    if (stations.length === 1) return stations[0];
+    return err(
+      stations.length === 0
+        ? `No station vault is configured; ${why} station vaults.`
+        : `More than one station vault is configured (${stations.map((s) => `"${s.name}"`).join(', ')}). Pass vault to choose one.`,
+    );
+  }
+
+  const stationVaultParam = z.string().optional().describe(
+    'Optional station vault name. Omit to use the only configured station vault.'
+  );
+
+  // Who an agent-filed issue or comment is attributed to by default: the MCP
+  // client's name from initialize.
+  function clientName(): string {
+    return server.server.getClientVersion()?.name || 'dossier-mcp';
+  }
+
+  // Run an issue operation. A station `not_found` whose message names the
+  // issue reads as that issue missing; any other `not_found` (e.g. a missing
+  // project or blocker) and every other failure is reported under `failPrefix`.
+  async function issueCall(
+    v: StationVaultRuntime,
+    id: string | undefined,
+    failPrefix: string,
+    fn: () => Promise<ToolResponse>,
+  ): Promise<ToolResponse> {
+    const invalid = id === undefined ? null : invalidIssueId(id);
+    if (invalid) return invalid;
+    try {
+      return await fn();
+    } catch (e) {
+      if (id !== undefined && e instanceof StationApiError && e.code === 'not_found' && e.message.includes(id)) {
+        return err(`Issue "${id}" not found in station vault "${v.name}" (${e.message}).`);
+      }
+      return err(`${failPrefix}: ${errorMessage(e)}`);
+    }
   }
 
   // ── Tools ──────────────────────────────────────────────────────────────────
@@ -811,14 +926,16 @@ export function createMcpServer(
     'Search the knowledge base using keyword search. Returns matching notes scored by relevance, with excerpts. '
     + 'By default spans all configured vaults, merging results by score; each result carries a `vault` field naming its source vault. '
     + 'If a station vault can\'t be reached, the other vaults still answer and a notice follows the results. '
-    + 'Notes tagged with the vault\'s default-excluded tags (e.g. archived, historical) are omitted by default; pass exclude_tags: [] to include them, or a custom list to override the default.',
+    + 'Notes tagged with the vault\'s default-excluded tags (e.g. archived, historical) are omitted by default; pass exclude_tags: [] to include them, or a custom list to override the default. '
+    + 'Pass type: "issue" to search only issues (notes under issues/), or type: "doc" for everything else.',
     {
       query: z.string().describe('Search query — keywords to search for'),
       limit: z.number().int().min(1).max(100).optional().describe('Maximum number of results to return (default: 10, max: 100)'),
       exclude_tags: z.array(z.string()).optional().describe('Tags to exclude from results (case-insensitive). Omit to use the vault default-exclude set; pass [] to exclude nothing; pass a list to replace the default.'),
+      type: z.enum(['issue', 'doc']).optional().describe('Restrict to issues (notes under issues/) or docs (every other note). Omit for both.'),
       vault: readVaultParam,
     },
-    async ({ query, limit, exclude_tags, vault }) =>
+    async ({ query, limit, exclude_tags, type, vault }) =>
       withToolError('Search failed', async () => {
         const vaults = resolveReadVaults(vault);
         if (isToolError(vaults)) return vaults;
@@ -841,10 +958,16 @@ export function createMcpServer(
           if (v.type === 'station') {
             // The station requires a non-empty query; an empty one matches nothing anyway.
             if (query.length === 0) return [];
-            const { results } = await v.client.searchNotes({ query, limit: cap, exclude_tags: excludeTags });
+            const { results } = await v.client.searchNotes({
+              query,
+              limit: cap,
+              exclude_tags: excludeTags,
+              ...(type ? { kind: type } : {}),
+            });
             return results.map((r) => ({ ...r, vault: v.name }));
           }
-          return v.searchIndex.search(query, cap, excludeTags).map((r) => ({ ...r, vault: v.name }));
+          const include = type ? (slug: string) => noteKind(slug) === type : undefined;
+          return v.searchIndex.search(query, cap, excludeTags, include).map((r) => ({ ...r, vault: v.name }));
         });
         merged.sort((a, b) => b.score - a.score);
         const limited = merged.slice(0, cap);
@@ -960,36 +1083,157 @@ export function createMcpServer(
     + 'Only station vaults keep history. Omit `vault` when exactly one station vault is configured.',
     {
       slug: z.string().describe('The note slug (e.g. "projects/app-search" or "issues/STN-142")'),
-      vault: z.string().optional().describe(
-        'Optional station vault name. Omit to use the only configured station vault.'
-      ),
+      vault: stationVaultParam,
       limit: z.number().int().min(1).max(100).optional().describe('Maximum number of entries to return (default: all)'),
     },
     async ({ slug, vault, limit }) => {
       if (!isValidSlug(slug)) return slugValidationError(slug);
-      let v: VaultRuntime;
-      if (vault !== undefined) {
-        const named = vaultsByName.get(vault);
-        if (!named) return unknownVaultError(vault);
-        v = named;
-      } else {
-        const stations = registry.vaults.filter((r) => r.type === 'station');
-        if (stations.length !== 1) {
-          return err(
-            stations.length === 0
-              ? 'No station vault is configured; note history is only kept by station vaults.'
-              : `More than one station vault is configured (${stations.map((s) => `"${s.name}"`).join(', ')}). Pass vault to choose one.`,
-          );
-        }
-        v = stations[0];
-      }
-      if (v.type !== 'station') {
-        return err(`Vault "${v.name}" is a local vault; note history is only kept by station vaults.`);
-      }
-      const station = v;
+      const station = resolveStationVault(vault, 'note history is only kept by');
+      if (isToolError(station)) return station;
       return withToolError(`Failed to read history of note "${slug}"`, async () => {
         const { entries } = await station.client.history({ slug, ...(limit !== undefined ? { limit } : {}) });
         return ok(JSON.stringify(entries, null, 2));
+      });
+    }
+  );
+
+  // ── Issue tools (station vaults only) ──────────────────────────────────────
+
+  const issueIdParam = z.string().describe('Issue ID, e.g. "STN-142"');
+  const issuesOnly = 'issues only exist in';
+
+  server.tool(
+    'create_issue',
+    'File a new issue in a dossier-station vault. Before filing, check whether it is already tracked (search_notes with type: "issue", or query_issues); '
+    + 'if it is, comment_issue on the existing issue instead of filing again. '
+    + 'The station also runs its own duplicate check: when existing issues look similar, NO issue is created and the result lists them as possible duplicates. '
+    + 'If one matches, add what you found to it with comment_issue — do not re-file. '
+    + 'Only after ruling out every candidate, call create_issue again with the same fields and confirm_new: true; '
+    + 'mention a related-but-distinct candidate\'s ID in the body (use blocked_by or found_during only when it really blocks this issue or this issue came out of it). '
+    + 'New issues land in triage and are recorded as created by an agent, with `source` naming the client. '
+    + 'Omit `vault` when exactly one station vault is configured.',
+    {
+      title: z.string().min(1).describe('Issue title'),
+      body: z.string().optional().describe('Markdown description of the issue'),
+      project: z.string().optional().describe('Slug of the project the issue belongs to'),
+      repos: z.array(z.string().min(1)).optional().describe('Repos the issue concerns; one by convention'),
+      labels: z.array(z.string().min(1)).optional().describe('Labels to apply'),
+      blocked_by: z.array(z.string()).optional().describe('IDs of issues blocking this one'),
+      found_during: z.string().min(1).optional().describe('Issue ID or PR URL this issue came out of'),
+      owner: z.string().min(1).optional().describe('Who owns the issue'),
+      source: z.string().min(1).optional().describe('Agent session or tool filing the issue (default: the MCP client name)'),
+      confirm_new: z.boolean().optional().describe('Skip the duplicate check. Pass only after reviewing possible-duplicate candidates and deciding none match.'),
+      vault: stationVaultParam,
+    },
+    async ({ title, body, project, repos, labels, blocked_by, found_during, owner, source, confirm_new, vault }) => {
+      const v = resolveStationVault(vault, issuesOnly);
+      if (isToolError(v)) return v;
+      return issueCall(v, undefined, 'Failed to create issue', async () => {
+        const res = await v.client.createIssue({
+          title,
+          'created-by': { kind: 'agent', source: source ?? clientName() },
+          ...defined({
+            body,
+            project,
+            repos,
+            labels,
+            'blocked-by': blocked_by,
+            'found-during': found_during,
+            owner,
+            confirm_new,
+          }),
+        });
+        if (res.result === 'possible-duplicates') {
+          return ok(
+            `No issue was created: ${res.candidates.length} existing issue(s) may already cover this.\n\n`
+            + `${JSON.stringify(res.candidates, null, 2)}\n\n`
+            + 'If one matches, add what you found to it with comment_issue instead of filing again. '
+            + 'If none match, call create_issue again with confirm_new: true '
+            + '(mention a related candidate\'s ID in the body; use blocked_by or found_during only when that relationship really holds).',
+          );
+        }
+        const fm = res.issue.frontmatter;
+        return ok(`Created issue ${fm.id}: "${fm.title}".\n\n${issueMarkdown(res.issue)}`);
+      });
+    }
+  );
+
+  server.tool(
+    'update_issue',
+    'Change fields of an issue in a dossier-station vault: status, title, project, repos, labels, blockers, owner, review date, resolution, PRs. '
+    + 'Omitted fields are untouched; pass null to clear an optional field. Lists (repos, labels, blocked_by, prs) are replaced, not merged. '
+    + 'Statuses: triage, backlog, in-progress, in-review, done, blocked, canceled. '
+    + '`resolution` (duplicate, obsolete, wont-do) is only allowed with status canceled, and `duplicate_of` only with resolution duplicate. '
+    + 'So reopening a canceled issue also needs resolution: null (and duplicate_of: null if it was a duplicate). '
+    + 'Returns the updated issue. Omit `vault` when exactly one station vault is configured.',
+    {
+      id: issueIdParam,
+      ...ISSUE_UPDATE_PARAMS,
+      vault: stationVaultParam,
+    },
+    async ({ id, vault, ...fields }) => {
+      const v = resolveStationVault(vault, issuesOnly);
+      if (isToolError(v)) return v;
+      const invalid = invalidIssueId(id);
+      if (invalid) return invalid;
+      const set: Record<string, unknown> = {};
+      for (const param of Object.keys(ISSUE_UPDATE_FIELDS) as Array<keyof typeof ISSUE_UPDATE_FIELDS>) {
+        const value = fields[param];
+        if (value !== undefined) set[ISSUE_UPDATE_FIELDS[param]] = value;
+      }
+      if (Object.keys(set).length === 0) {
+        return err(`update_issue on "${id}" changed nothing — supply at least one field to change.`);
+      }
+      return issueCall(v, id, `Failed to update issue "${id}"`, async () => {
+        const { issue } = await v.client.updateIssue({ id, set: set as IssueFieldsUpdate });
+        return ok(issueMarkdown(issue));
+      });
+    }
+  );
+
+  server.tool(
+    'comment_issue',
+    'Add a comment to an issue in a dossier-station vault. The station appends it under the issue\'s "## Comments" heading, stamped with the author and time. '
+    + 'Use this to add findings to an issue that already tracks the problem, rather than filing a duplicate. '
+    + 'Returns the updated issue. Omit `vault` when exactly one station vault is configured.',
+    {
+      id: issueIdParam,
+      body: z.string().min(1).describe('Markdown comment text'),
+      author: z.string().min(1).optional().describe('Comment author (default: the MCP client name)'),
+      vault: stationVaultParam,
+    },
+    async ({ id, body, author, vault }) => {
+      const v = resolveStationVault(vault, issuesOnly);
+      if (isToolError(v)) return v;
+      return issueCall(v, id, `Failed to comment on issue "${id}"`, async () => {
+        const { issue } = await v.client.commentIssue({ id, author: author ?? clientName(), body });
+        return ok(issueMarkdown(issue));
+      });
+    }
+  );
+
+  server.tool(
+    'query_issues',
+    'Find issues in a dossier-station vault by status, project, repo, label, or staleness; all filters combine with AND. '
+    + 'Returns summaries (id, title, status, project, repos, labels, last-reviewed); read one in full with get_note on "issues/<id>". '
+    + 'For keyword search over issues, use search_notes with type: "issue". Omit `vault` when exactly one station vault is configured.',
+    {
+      status: z.array(z.enum(ISSUE_STATUSES)).optional().describe('Match any of these statuses'),
+      project: z.string().optional().describe('Project slug'),
+      include_subprojects: z.boolean().optional().describe('With project, also match issues in its descendant projects (default: true)'),
+      repo: z.string().min(1).optional().describe('Repo the issue concerns'),
+      label: z.string().min(1).optional().describe('Label the issue carries'),
+      stale: z.literal(true).optional().describe('Pass true for only issues not reviewed within the station\'s stale threshold'),
+      limit: z.number().int().min(1).optional().describe('Maximum number of issues to return'),
+      vault: stationVaultParam,
+    },
+    async ({ vault, ...filters }) => {
+      const v = resolveStationVault(vault, issuesOnly);
+      if (isToolError(v)) return v;
+      return issueCall(v, undefined, 'Failed to query issues', async () => {
+        const { issues } = await v.client.queryIssues(defined(filters));
+        if (issues.length === 0) return ok('No issues match.');
+        return ok(JSON.stringify(issues, null, 2));
       });
     }
   );

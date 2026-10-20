@@ -10,6 +10,7 @@ Detailed behavior of every MCP tool and resource the server registers (`server/s
   - **Read tools** (`list_notes`, `search_notes`, `list_todos`): omitting `vault` spans *all* vaults, and every result carries a `vault` field naming its source.
   - **Write tools** (`create_note`, `update_note`, `append_to_section`, `edit_note`, `edit_frontmatter`, `move_note`, `delete_note`): omitting `vault` targets the **default vault**.
   - `get_note` resolves across all vaults (see below); `get_vault_context` reads the default vault's context file.
+  - **Station-only tools** (`note_history` and the [issue tools](#issue-tools)): omitting `vault` uses the only configured station vault.
 - **Default tag exclusion.** `list_notes`, `search_notes`, and `list_todos` omit notes carrying any tag in the default-exclude set (`archived`, `historical` unless configured otherwise). Matching is case-insensitive and is a hard filter, not a de-rank. Per call, `exclude_tags: []` disables exclusion and a non-empty list replaces the default set. `get_note` and the resources ignore exclusion — it is a discovery default, not an access control.
 - **Index freshness.** Every successful write to a local vault rebuilds the search index of the vault it wrote to before returning, so a following `search_notes` sees the change. External edits (an editor, file sync) are picked up by the per-vault file watcher.
 - **`updated` stamping.** The surgical write tools (`append_to_section`, `edit_note`, `edit_frontmatter`) set `updated: YYYY-MM-DD` in the host's local time zone. `create_note` sets `date` the same way; `update_note` preserves the original `date`.
@@ -18,7 +19,7 @@ Detailed behavior of every MCP tool and resource the server registers (`server/s
   - **Degraded reads.** When `vault` is omitted and a station fails (unreachable, timed out, or an error response), the call still answers from the other vaults and appends a second text item: `Station vault "<name>" unavailable (<code>: <message>); results cover the other vaults only.` The first item keeps its usual shape. For `get_note`, a hit elsewhere can't be checked against the station for a collision. Naming the station in `vault` turns the failure into a normal error.
   - **Writes** (`create_note`, `update_note`, `append_to_section`, `edit_note`, `edit_frontmatter`) read the note from the station, apply the same change and frontmatter merge as a local write, and store the result with the station's `write` verb. `create_note` asks the station to refuse an existing slug. Frontmatter lists and objects already on a station note are kept on write, though, as for local notes, new list or object values can't be set through these tools. Editing an existing station note never adds a `title`, `date`, `tags`, or `related` it didn't have, unless the edit sets them.
   - **Edits are read-then-write.** The `write` verb replaces the stored note and carries no revision check, so two clients editing the same station note at once can lose one edit.
-  - **Issues are not notes here.** The station's `write` verb takes docs only, so on a station the write tools refuse any `issues/…` slug before calling it. Issues are still readable through the read tools.
+  - **Issues are not notes here.** The station's `write` verb takes docs only, so on a station the write tools refuse any `issues/…` slug before calling it and point at the [issue tools](#issue-tools). Issues are still readable through the read tools.
   - **Refused:** `delete_note` and `move_note` (the station has no such operation). `list_todos` skips stations with a notice (`Station vault "<name>" is not scanned for todos.`) and errors when one is named.
   - `get_vault_context` on a station returns the raw Markdown (frontmatter + body) of the note named by `context_file` without `.md` (default `profile`), as a local vault returns its raw context file. Station errors carry their code, e.g. `Failed to write note "x": conflict: …`.
 - **Array coercion.** `tags`, `related`, and the `add_*`/`remove_*` list params accept a real array, a JSON-encoded array string, or a comma-separated string. On `create_note`/`update_note`, an empty list (`[]` or `"[]"`) means "keep the existing value", not "clear" — this protects the common get → modify → update round trip where clients send `tags: []` to mean "unchanged". To remove tags or related entries, use `edit_frontmatter`.
@@ -59,7 +60,10 @@ Returns the note's raw Markdown (frontmatter + body), suitable for passing strai
 | `query` | string | Keywords. |
 | `limit` | int 1–100? | Default 10. |
 | `exclude_tags` | string[]? | Overrides the default-exclude set for this call. |
+| `type` | `issue` \| `doc`? | `issue` keeps only notes under `issues/`; `doc` keeps every other note. Omit for both. |
 | `vault` | string? | Omit to span all vaults. |
+
+`type` is sent to stations as `kind`; local vaults apply the same slug rule and filter before the limit, like tag exclusion.
 
 BM25 keyword search over title, tags, `related` slugs, and body, with field weighting (title > tags > related > body). Terms of three or more characters also prefix-match; shorter terms match exactly. Returns a JSON array of `{ slug, frontmatter, score, excerpt, vault }`. Excerpts are drawn from title, tags, and body (never from `related` slugs).
 
@@ -173,6 +177,83 @@ Permanently unlinks the file — there is no trash — and removes any directori
 | `limit` | number? | 1–100; omit for the full history. |
 
 Returns the station's commit history for the note as a JSON array of `{ commit, date, author, message, status_change? }`, newest first; `status_change` (`{ from, to }`, `from` null on creation) appears on issue status transitions. Only stations keep history: a local vault errors, and with `vault` omitted the call errors unless exactly one station is configured.
+
+## Issue tools
+
+Issues live only in station vaults, as notes under `issues/<id>` (IDs like `STN-142`). These tools call the station's issue operations; read an issue in full with `get_note` on `issues/<id>`, and its status changes with `note_history`.
+
+All four take an optional `vault`, resolved like `note_history`'s: omit it when exactly one station is configured; naming a local vault, omitting it with no or several stations, or naming an unknown vault errors. Station failures are errors (`Failed to …: <code>: <message>`), never notices. An `id` that isn't an issue ID errors before any request, and a station `not_found` whose message names the issue reads `Issue "<id>" not found in station vault "<name>" (<station message>).`; a `not_found` about anything else (a project, a blocker) keeps the `Failed to …` form.
+
+### `create_issue`
+
+| Param | Type | Notes |
+|---|---|---|
+| `title` | string | |
+| `body` | string? | Markdown description. |
+| `project` | string? | Project slug. |
+| `repos`, `labels` | string[]? | |
+| `blocked_by` | string[]? | Blocking issue IDs. |
+| `found_during` | string? | Issue ID or PR URL the issue came out of. |
+| `owner` | string? | |
+| `source` | string? | Recorded as `created-by.source`. Default: the MCP client's name from initialize (`dossier-mcp` if it sent none). |
+| `confirm_new` | boolean? | Skip the duplicate check. |
+| `vault` | string? | |
+
+Files the issue with `created-by: { kind: agent, source }`; agent-filed issues always start in `triage`, so there is no `status` param.
+
+**Duplicate check.** Unless `confirm_new` is set, the station compares the new issue against existing ones. When some score above its threshold, nothing is created and the call succeeds (not an error) with:
+
+```
+No issue was created: <n> existing issue(s) may already cover this.
+
+[ { "id", "title", "status", "score" }, … ]   (at most 5)
+
+If one matches, add what you found to it with comment_issue instead of filing again. If none match, call create_issue again with confirm_new: true (mention a related candidate's ID in the body; use blocked_by or found_during only when that relationship really holds).
+```
+
+The intended flow: check first (`search_notes` with `type: "issue"`, or `query_issues`); on candidates, comment on the match; re-send with `confirm_new: true` only after ruling every candidate out. A related-but-distinct candidate is mentioned in the body; `blocked_by` and `found_during` keep their specific meanings (it blocks this issue / this issue came out of it). On success the result is `Created issue <id>: "<title>".` followed by the issue as Markdown.
+
+Attribution is self-declared: `source` (and `comment_issue`'s `author`) record whatever the caller passes.
+
+### `update_issue`
+
+| Param | Type | Notes |
+|---|---|---|
+| `id` | string | |
+| `title` | string? | |
+| `status` | enum? | `triage`, `backlog`, `in-progress`, `in-review`, `done`, `blocked`, `canceled`. |
+| `project`, `found_during`, `owner`, `last_reviewed` | string \| null? | `null` clears. `last_reviewed` is `YYYY-MM-DD`. |
+| `resolution` | `duplicate` \| `obsolete` \| `wont-do` \| null? | Only with status `canceled`. |
+| `duplicate_of` | string \| null? | Only with resolution `duplicate`. |
+| `repos`, `labels`, `blocked_by`, `prs` | string[]? | Replace the stored list. |
+| `vault` | string? | |
+
+Params map to the station's hyphenated fields (`blocked_by` → `blocked-by`, …). Omitted fields are untouched; at least one is required. The station enforces the cross-field rules and answers `invalid_request` when the result would break them, so reopening a canceled issue also needs `resolution: null` (and `duplicate_of: null` if it was a duplicate). Returns the updated issue as Markdown.
+
+### `comment_issue`
+
+| Param | Type | Notes |
+|---|---|---|
+| `id` | string | |
+| `body` | string | Markdown comment. |
+| `author` | string? | Default: the MCP client's name, as for `create_issue`'s `source`. |
+| `vault` | string? | |
+
+The station appends the comment under the issue's `## Comments` heading, stamped with author and time. Returns the updated issue as Markdown.
+
+### `query_issues`
+
+| Param | Type | Notes |
+|---|---|---|
+| `status` | enum[]? | Match any. |
+| `project` | string? | |
+| `include_subprojects` | boolean? | With `project`, also match its descendant projects. Station default: true. |
+| `repo`, `label` | string? | |
+| `stale` | `true`? | Only issues not reviewed within the station's stale threshold. `false` is rejected, since the contract defines no meaning for it. |
+| `limit` | int ≥ 1? | |
+| `vault` | string? | |
+
+Filters combine with AND and are sent as given. Returns a JSON array of `{ id, title, status, project?, repos, labels, last-reviewed? }`, or `No issues match.`
 
 ## Resources
 

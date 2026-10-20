@@ -72,6 +72,8 @@ A station vault (`type: station`) is a dossier-station instance. Its runtime (`S
 - **Timeouts are unreachability.** `createStationRuntime` wraps `fetch` with `AbortSignal.timeout(timeoutMs)`; the client reports the abort as `unreachable`.
 - **No index or watcher.** The station searches on its side; local writes rebuild their own index, station writes rebuild nothing.
 - **Unsupported operations are refused, not emulated:** `delete_note` and `move_note` (no station verb), `list_todos` (would need every note body), and note writes to `issues/…` slugs (the contract routes issues through its issue operations, not `write`).
+- **Issues have their own tools.** `create_issue`, `update_issue`, `comment_issue`, and `query_issues` are thin wrappers over the matching client methods. They and `note_history` target one station through `resolveStationVault`, so a failure is an error rather than a notice. The station owns issue rules (duplicate detection, ID allocation, the resolution cross-field checks); the server only validates the ID shape and maps snake_case params to the contract's hyphenated fields (`ISSUE_UPDATE_FIELDS`, with the zod params in `ISSUE_UPDATE_PARAMS`; compile-time checks keep the map, the params, and `IssueFieldsUpdate` in step). A possible-duplicates answer is a successful result, since it is a step in the create flow. Attribution defaults to the MCP client's name (`getClientVersion()`).
+- **Issue vs doc is a slug rule.** `noteKind` treats a slug under `issues/` as an issue, matching the station's `kind`; `search_notes`' `type` filter sends `kind` to stations and passes the same rule to `SearchIndex.search` as an `include` predicate for local vaults.
 
 Search scores are per-vault BM25 and are merged by raw score without normalization; see the `search_notes` entry in [TOOLS.md](TOOLS.md#search_notes).
 
@@ -195,7 +197,8 @@ Run `pnpm test` (Jest via ts-jest, ESM) and `pnpm typecheck` from the repo root 
 |---|---|
 | `mcp/__tests__/mcpTools.test.ts` | Tool handlers end to end against a temp vault: schema validation and coercion, slug validation, error shapes, `withToolError`, frontmatter round-trip and denylist, each write tool's success and structured-error paths (and that failed edits leave the note untouched), index rebuild after writes, `exclude_tags` behavior, resources, and the `vault` param surface. |
 | `mcp/__tests__/multiVault.test.ts` | Vault routing: read-wide results with provenance, cross-vault search merge, `get_note` resolution and collision errors, write-narrow defaults, per-vault context files, unknown-vault errors. |
-| `mcp/__tests__/station.test.ts` | Station vaults against `stubStation.ts`, an in-process HTTP stub that routes by the package's endpoint table and parses every request and response through its schemas: read-wide merging and provenance, raw round-trip, degraded reads (server gone, timeout, rejected key), writes through `write` (create conflict, extras preserved), `note_history`, and the refused tools. |
+| `mcp/__tests__/station.test.ts` | Station vaults against `stubStation.ts`, an in-process HTTP stub that routes by the package's endpoint table and parses every request and response through its schemas: read-wide merging and provenance, raw round-trip, degraded reads (server gone, timeout, rejected key), writes through `write` (create conflict, extras preserved), `note_history`, the `search_notes` `type` filter, and the refused tools. |
+| `mcp/__tests__/stationIssues.test.ts` | The issue tools against the same stub, which also implements the single-issue operations: create with the duplicate-candidates branch and `confirm_new`, `created-by` attribution, update field mapping and `null` clearing, station rule rejections, comments, query filters and subprojects, and station-vault resolution. |
 | `config/__tests__/vaultConfig.test.ts` | Config resolution chain, `NOTES_DIR` fallback, tilde expansion, station entries, the shared-default guard, every named validation error, env-over-config exclude tags. |
 | `config/__tests__/excludeTags.test.ts` | `DOSSIER_EXCLUDE_TAGS` parsing (unset vs. empty vs. list) and precedence. |
 | `notes/__tests__/NoteStore.test.ts` | CRUD, slug confinement, date handling, symlink walk and loop protection, conflict-file filtering, directory pruning, atomic writes, move atomicity and rollback, reference and wiki-link rewriting, watcher behavior, rejection of executable frontmatter in vault files. |
@@ -206,7 +209,7 @@ Run `pnpm test` (Jest via ts-jest, ESM) and `pnpm typecheck` from the repo root 
 | `notes/__tests__/wikilinks.test.ts` | Link forms, exact-slug matching, fence skipping. |
 | `notes/__tests__/todos.test.ts` | Task-item extraction and fence stripping. |
 | `notes/__tests__/tagFilter.test.ts` | Case-insensitive exclusion helpers. |
-| `search/__tests__/SearchIndex.test.ts` | BM25 scoring and field weighting, prefix and single-character queries, excerpts, limits, empty corpus, tag exclusion before limiting. |
+| `search/__tests__/SearchIndex.test.ts` | BM25 scoring and field weighting, prefix and single-character queries, excerpts, limits, empty corpus, tag exclusion and the `include` predicate before limiting. |
 
 Conventions:
 
