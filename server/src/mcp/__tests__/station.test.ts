@@ -158,6 +158,44 @@ describe('station vault', () => {
     });
   });
 
+  describe('search type filter', () => {
+    beforeEach(async () => {
+      await seedLocal('issues/local-alpha', 'Local alpha issue', 'alpha issue here', '2026-10-02');
+      stub.notes.set('issues/STN-2', {
+        frontmatter: { id: 'STN-2', type: 'issue', title: 'Alpha issue', created: '2026-09-21T10:00' },
+        body: 'alpha issue body\n',
+      });
+    });
+
+    const slugs = (r: ToolResult) => (JSON.parse(text(r)) as Array<{ slug: string }>).map((h) => h.slug).sort();
+
+    test('type: "issue" sends kind to the station and keeps only local issues/ notes', async () => {
+      const r = await call('search_notes', { query: 'alpha', type: 'issue' });
+      expect(stub.requests.at(-1)).toEqual({
+        endpoint: 'searchNotes',
+        body: { query: 'alpha', limit: 10, exclude_tags: ['archived'], kind: 'issue' },
+      });
+      expect(slugs(r)).toEqual(['issues/STN-2', 'issues/local-alpha']);
+    });
+
+    test('type: "doc" leaves out issues on both sides', async () => {
+      const r = await call('search_notes', { query: 'alpha', type: 'doc' });
+      expect(stub.requests.at(-1)?.body.kind).toBe('doc');
+      expect(slugs(r)).toEqual(['notes/local-alpha', 'projects/app-search']);
+    });
+
+    test('omitted type searches both and sends no kind', async () => {
+      const r = await call('search_notes', { query: 'alpha' });
+      expect(stub.requests.at(-1)?.body).not.toHaveProperty('kind');
+      expect(slugs(r)).toEqual(['issues/STN-2', 'issues/local-alpha', 'notes/local-alpha', 'projects/app-search']);
+    });
+
+    test('the local type filter applies before the limit', async () => {
+      const r = await call('search_notes', { query: 'alpha', type: 'issue', limit: 1, vault: 'personal' });
+      expect(slugs(r)).toEqual(['issues/local-alpha']);
+    });
+  });
+
   // ── Degraded reads ─────────────────────────────────────────────────────────
 
   describe('when the station fails', () => {
@@ -346,6 +384,7 @@ describe('station vault', () => {
       const r = await call(tool, { ...args, vault: 'team' });
       expect(r.isError).toBe(true);
       expect(text(r)).toMatch(/is an issue in station vault "team"/);
+      expect(text(r)).toMatch(/update_issue or comment_issue/);
       expect(stub.requests).toEqual([]);
     });
 

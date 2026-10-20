@@ -5,21 +5,32 @@
  * response through its response schema before sending, so the stub can't
  * drift from what a real station is allowed to answer.
  *
- * Notes and their history live in memory. Only the note reads and the
- * write/history/freshen verbs are implemented; every other endpoint answers
- * `not_implemented`.
+ * Notes and their history live in memory; issues are notes under `issues/`.
+ * The note reads, the write/history/freshen verbs and the single-issue
+ * operations are implemented; every other endpoint answers `not_implemented`.
+ * Duplicate detection is a simple title-word overlap, enough to drive the
+ * candidates branch.
  */
 
 import http from 'http';
 import type { AddressInfo } from 'net';
 import {
   ERROR_STATUS,
+  IssueFrontmatterSchema,
+  MAX_DUPLICATE_CANDIDATES,
   endpoints,
   type EndpointDef,
   type ErrorCode,
   type HistoryEntry,
+  type IssueFrontmatter,
+  type IssueStatus,
   type NoteFrontmatter,
 } from 'dossier-station-api';
+
+/** Share of a new title's words an existing title must contain to be a candidate. */
+const DUPLICATE_THRESHOLD = 0.5;
+/** Days after which an issue's `last-reviewed` makes it stale. */
+const STALE_DAYS = 30;
 
 export interface StubNote {
   frontmatter: NoteFrontmatter;
@@ -59,11 +70,78 @@ function kindOf(slug: string): 'issue' | 'doc' {
   return slug.startsWith('issues/') ? 'issue' : 'doc';
 }
 
+function titleWords(title: string): Set<string> {
+  return new Set(title.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 3));
+}
+
 export async function startStubStation(apiKey = 'test-key'): Promise<StubStation> {
   const notes = new Map<string, StubNote>();
   const history = new Map<string, HistoryEntry[]>();
   const requests: StubStation['requests'] = [];
   let commitCounter = 0;
+
+  function record(slug: string, message: string, statusChange?: HistoryEntry['status_change']): string {
+    const commit = (++commitCounter).toString(16).padStart(7, '0');
+    const entry: HistoryEntry = {
+      commit,
+      date: new Date().toISOString(),
+      author: 'stub',
+      message,
+      ...(statusChange ? { status_change: statusChange } : {}),
+    };
+    history.set(slug, [entry, ...(history.get(slug) ?? [])]);
+    return commit;
+  }
+
+  /** Every stored issue whose frontmatter is valid; seeded notes that aren't are ignored. */
+  function issues(): Array<{ slug: string; fm: IssueFrontmatter; body: string }> {
+    const out = [];
+    for (const [slug, n] of notes) {
+      if (kindOf(slug) !== 'issue') continue;
+      const parsed = IssueFrontmatterSchema.safeParse(n.frontmatter);
+      if (parsed.success) out.push({ slug, fm: parsed.data, body: n.body });
+    }
+    return out;
+  }
+
+  function getIssue(id: string): { slug: string; fm: IssueFrontmatter; body: string } {
+    const found = issues().find((i) => i.fm.id === id);
+    if (!found) throw new StubError('not_found', `no issue ${id}`);
+    return found;
+  }
+
+  function nextIssueId(): string {
+    let max = 0;
+    for (const slug of notes.keys()) {
+      const m = /^issues\/STN-(\d+)$/.exec(slug);
+      if (m) max = Math.max(max, Number(m[1]));
+    }
+    return `STN-${max + 1}`;
+  }
+
+  function storeIssue(fm: Record<string, unknown>, body: string, message: string, from: IssueStatus | null) {
+    const parsed = IssueFrontmatterSchema.safeParse(fm);
+    if (!parsed.success) throw new StubError('invalid_request', parsed.error.message);
+    const slug = `issues/${parsed.data.id}`;
+    notes.set(slug, { frontmatter: parsed.data, body });
+    const to = parsed.data.status;
+    const commit = record(slug, message, from === to ? undefined : { from, to });
+    return { issue: { frontmatter: parsed.data, body }, commit };
+  }
+
+  /** `project` itself, or a project whose `parent` chain reaches it. */
+  function inProject(project: string | undefined, target: string, subprojects: boolean): boolean {
+    const seen = new Set<string>();
+    let current = project;
+    while (current !== undefined && !seen.has(current)) {
+      if (current === target) return true;
+      if (!subprojects) return false;
+      seen.add(current);
+      const parent = notes.get(`projects/${current}`)?.frontmatter.parent;
+      current = typeof parent === 'string' ? parent : undefined;
+    }
+    return false;
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handlers: Record<string, (req: any) => unknown> = {
@@ -99,14 +177,7 @@ export async function startStubStation(apiKey = 'test-key'): Promise<StubStation
       const existing = notes.get(slug);
       if (existing && create_only) throw new StubError('conflict', `${slug} already exists`);
       notes.set(slug, { frontmatter: frontmatter ?? existing?.frontmatter ?? {}, body });
-      const commit = (++commitCounter).toString(16).padStart(7, '0');
-      const entry: HistoryEntry = {
-        commit,
-        date: new Date().toISOString(),
-        author: 'stub',
-        message: message ?? `${existing ? 'Update' : 'Create'} ${slug}`,
-      };
-      history.set(slug, [entry, ...(history.get(slug) ?? [])]);
+      const commit = record(slug, message ?? `${existing ? 'Update' : 'Create'} ${slug}`);
       return { slug, commit, created: !existing };
     },
     history: ({ slug, limit }) => {
@@ -115,6 +186,70 @@ export async function startStubStation(apiKey = 'test-key'): Promise<StubStation
       return { entries: entries.slice(0, limit ?? entries.length) };
     },
     freshen: () => ({ current: true }),
+    createIssue: ({ confirm_new, body, ...req }) => {
+      if (!confirm_new) {
+        const words = titleWords(req.title);
+        const candidates = issues()
+          .map(({ fm }) => {
+            const existing = titleWords(fm.title);
+            const shared = [...words].filter((w) => existing.has(w)).length;
+            return { id: fm.id, title: fm.title, status: fm.status, score: words.size ? shared / words.size : 0 };
+          })
+          .filter((c) => c.score >= DUPLICATE_THRESHOLD)
+          .sort((a, b) => b.score - a.score)
+          .slice(0, MAX_DUPLICATE_CANDIDATES);
+        if (candidates.length > 0) return { result: 'possible-duplicates', candidates };
+      }
+      const id = nextIssueId();
+      const fm = {
+        id,
+        type: 'issue',
+        status: 'triage',
+        created: new Date().toISOString(),
+        repos: [],
+        labels: [],
+        'blocked-by': [],
+        prs: [],
+        ...req,
+      };
+      return { result: 'created', ...storeIssue(fm, body ?? '', `Create ${id}`, null) };
+    },
+    updateIssue: ({ id, set }) => {
+      const { fm, body } = getIssue(id);
+      if (typeof set['duplicate-of'] === 'string') getIssue(set['duplicate-of']);
+      const next: Record<string, unknown> = { ...fm };
+      for (const [key, value] of Object.entries(set as Record<string, unknown>)) {
+        if (value === null) delete next[key];
+        else next[key] = value;
+      }
+      return storeIssue(next, body, `Update ${id}`, fm.status);
+    },
+    commentIssue: ({ id, author, body }) => {
+      const issue = getIssue(id);
+      const heading = /^## Comments$/m.test(issue.body) ? '' : '\n## Comments\n';
+      const comment = `${heading}\n**${author}** (${new Date().toISOString()}):\n\n${body}\n`;
+      return storeIssue(issue.fm, issue.body + comment, `Comment on ${id}`, issue.fm.status);
+    },
+    queryIssues: ({ status, project, include_subprojects, repo, label, stale, limit }) => {
+      const cutoff = new Date(Date.now() - STALE_DAYS * 86_400_000).toISOString().slice(0, 10);
+      const matches = issues()
+        .map(({ fm }) => fm)
+        .filter((fm) => !status || status.includes(fm.status))
+        .filter((fm) => !project || inProject(fm.project, project, include_subprojects ?? true))
+        .filter((fm) => !repo || fm.repos.includes(repo))
+        .filter((fm) => !label || fm.labels.includes(label))
+        .filter((fm) => stale !== true || fm['last-reviewed'] === undefined || fm['last-reviewed'] < cutoff)
+        .map((fm) => ({
+          id: fm.id,
+          title: fm.title,
+          status: fm.status,
+          ...(fm.project ? { project: fm.project } : {}),
+          repos: fm.repos,
+          labels: fm.labels,
+          ...(fm['last-reviewed'] ? { 'last-reviewed': fm['last-reviewed'] } : {}),
+        }));
+      return { issues: matches.slice(0, limit ?? matches.length) };
+    },
   };
 
   const byPath = new Map<string, { name: string; def: EndpointDef }>(
